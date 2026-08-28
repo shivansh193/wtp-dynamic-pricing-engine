@@ -1,0 +1,43 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Node / Next.js ----
+node_modules/
+dashboard/.next/
+dashboard/out/
+dashboard/build/
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ---- Data & model artifacts (large / regenerable) ----
+data/raw/*
+!data/raw/.gitkeep
+!data/raw/README.md
+data/processed/*
+!data/processed/.gitkeep
+model/artifacts/*.pkl
+model/artifacts/*.joblib
+model/artifacts/*.txt
+model/artifacts/*.json
+!model/artifacts/.gitkeep
+
+# ---- GeoIP databases (license-restricted, must be fetched) ----
+*.mmdb
+data/raw/geoip/
+
+# ---- Local env / secrets ----
+.env
+.env.local
+*.local
+
+# ---- OS noise ----
+.DS_Store
+Thumbs.db

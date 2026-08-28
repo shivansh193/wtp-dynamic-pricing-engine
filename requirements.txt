@@ -1,0 +1,45 @@
+# ============================================================================
+# Shared Python dependencies - data-pipeline, model, api, ip-enrichment
+# Target: Python 3.11
+# Cash Flow Oracle (Track 04) has its own heavier requirements file.
+# ============================================================================
+
+# ---- Core numerics / data ----
+numpy==1.26.4
+pandas==2.2.2
+scipy==1.13.1
+
+# ---- Modelling ----
+lightgbm==4.3.0
+scikit-learn==1.5.0
+shap==0.45.1
+joblib==1.4.2
+
+# ---- Plots for /docs artefacts ----
+matplotlib==3.9.0
+
+# ---- API ----
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+pydantic==2.7.4
+pydantic-settings==2.3.4
+python-multipart==0.0.9
+
+# ---- Datastores ----
+asyncpg==0.29.0
+redis==5.0.7
+
+# ---- IP enrichment ----
+geoip2==4.8.0
+maxminddb==2.6.2
+
+# ---- Data collection ----
+pytrends==4.9.2
+requests==2.32.3
+beautifulsoup4==4.12.3
+lxml==5.2.2
+openpyxl==3.1.4
+
+# ---- Dev / test ----
+pytest==8.2.2
+httpx==0.27.0

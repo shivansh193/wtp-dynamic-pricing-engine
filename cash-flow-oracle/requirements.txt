@@ -1,0 +1,28 @@
+# ============================================================================
+# Cash Flow Oracle (Track 04 scaffold) - time-series forecasting stack
+# Kept separate from the root requirements because prophet / arch / hmmlearn
+# pull a large compiled-dependency tree that the Track 01 services don't need.
+# ============================================================================
+
+numpy==1.26.4
+pandas==2.2.2
+scipy==1.13.1
+
+# ---- Forecasting / regime detection ----
+prophet==1.1.5
+arch==7.0.0            # GARCH(1,1) volatility model
+hmmlearn==0.3.2        # Hidden Markov Model regime detection
+statsmodels==0.14.2
+
+# ---- API ----
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+pydantic==2.7.4
+
+# ---- Datastore ----
+asyncpg==0.29.0
+SQLAlchemy==2.0.31
+
+# ---- Data collection ----
+requests==2.32.3
+pandas==2.2.2
