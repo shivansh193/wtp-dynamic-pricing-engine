@@ -38,6 +38,12 @@ data/raw/geoip/
 .env.local
 *.local
 
+# ---- Cash Flow Oracle local store ----
+cash-flow-oracle/*.sqlite3
+
+# ---- smoke test output ----
+scripts/smoke_output.json
+
 # ---- OS noise ----
 .DS_Store
 Thumbs.db

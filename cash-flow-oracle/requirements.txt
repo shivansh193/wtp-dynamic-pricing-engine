@@ -25,4 +25,3 @@ SQLAlchemy==2.0.31
 
 # ---- Data collection ----
 requests==2.32.3
-pandas==2.2.2

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wtp-dynamic-pricing-engine"
+version = "1.0.0"
+description = "WTP Dynamic Pricing Engine + Cash Flow Oracle - Razorpay AI Buildathon 2026"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+# The brief mandates hyphenated directory names that are not legal Python
+# module names. Map them to importable packages here so `pip install -e .`
+# makes `import ip_enrichment` / `import cash_flow_oracle` work everywhere
+# (pytest, uvicorn import strings, `python -m ...`).
+[tool.setuptools]
+py-modules = []
+
+[tool.setuptools.package-dir]
+ip_enrichment = "ip-enrichment"
+cash_flow_oracle = "cash-flow-oracle"
+api = "api"
+model = "model"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["api*", "model*"]
+
+# pytest config lives in pytest.ini (single source of truth)
