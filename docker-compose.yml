@@ -1,0 +1,113 @@
+# ==========================================================================
+# WTP Dynamic Pricing Engine - full local stack
+#
+#   docker compose up --build
+#
+# Boot order:
+#   postgres + redis  ->  seeder (data pipeline + model training, runs once)
+#   ->  api  ->  dashboard
+#
+# First boot takes a few minutes (pip install + 50k-row generation + training).
+# Subsequent boots are fast - the seeder sees its marker file and exits.
+# ==========================================================================
+
+x-python-build: &python-build
+  build:
+    context: .
+    dockerfile: Dockerfile
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-wtp}
+      POSTGRES_USER: ${POSTGRES_USER:-wtp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wtp_dev_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # schema is applied automatically on an empty data dir
+      - ./api/schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wtp} -d ${POSTGRES_DB:-wtp}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ---- one-shot: generate data + train models into the shared volumes ----
+  seeder:
+    <<: *python-build
+    command: ["bash", "scripts/seed.sh"]
+    environment:
+      SYNTHETIC_ROWS: ${SYNTHETIC_ROWS:-50000}
+      RANDOM_SEED: ${RANDOM_SEED:-42}
+      MAXMIND_LICENSE_KEY: ${MAXMIND_LICENSE_KEY:-}
+      IPINFO_TOKEN: ${IPINFO_TOKEN:-}
+    volumes:
+      - appdata:/app/data
+      - appmodels:/app/model/artifacts
+      - ./docs:/app/docs           # training plots land in the repo's docs/
+    restart: "no"
+
+  # ---- the real-time pricing API ----
+  api:
+    <<: *python-build
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-wtp}:${POSTGRES_PASSWORD:-wtp_dev_password}@postgres:5432/${POSTGRES_DB:-wtp}
+      REDIS_URL: redis://redis:6379/0
+      LATENCY_BUDGET_MS: ${LATENCY_BUDGET_MS:-200}
+      MODEL_DIR: /app/model/artifacts
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      DB_REQUIRED: "false"
+      GEOIP_CITY_DB: /app/data/raw/geoip/GeoLite2-City.mmdb
+      GEOIP_ASN_DB: /app/data/raw/geoip/GeoLite2-ASN.mmdb
+    ports:
+      - "8000:8000"
+    volumes:
+      - appdata:/app/data
+      - appmodels:/app/model/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      seeder:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # ---- the demo dashboard ----
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  appdata:
+  appmodels:

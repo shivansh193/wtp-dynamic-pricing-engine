@@ -1,0 +1,27 @@
+.git
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# node / next
+dashboard/node_modules
+dashboard/.next
+dashboard/out
+
+# large / regenerable - the seeder rebuilds these into volumes
+data/raw/*
+data/processed/*
+model/artifacts/*.joblib
+model/artifacts/*.json
+model/artifacts/*.txt
+
+# local env
+.env
+.env.local
+
+# docs images are fine to ship, keep them
+scratchpad

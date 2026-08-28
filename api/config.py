@@ -38,7 +38,9 @@ class Settings:
 
     # ---- CORS ----
     CORS_ORIGINS: list[str] = _env(
-        "CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
+        "CORS_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:3001,http://127.0.0.1:3001",
     ).split(",")
 
     # ---- misc ----
