@@ -76,6 +76,13 @@ async def personalize(payload: CustomerSignals) -> tuple[PricingResponse, dict]:
     session_id = payload.session_id or f"sess_{uuid.uuid4().hex[:16]}"
     signals = payload.model_signals()
 
+    # a payment-method mix, if supplied, drives the checkout ordering + the
+    # derived preference (argmax). Trust/COD signals are derived upstream by
+    # /config/derive; here we just make the preference consistent with the mix.
+    split = signals.get("payment_split")
+    if isinstance(split, dict) and sum(v or 0 for v in split.values()) > 0:
+        signals["payment_method_preference"] = max(split, key=lambda k: split.get(k, 0) or 0)
+
     # ---- 1. IP enrichment ----
     ip_brief, ip_ms = await _enrich_ip(payload.ip)
     # let enrichment override trust signals unless the caller pinned them
@@ -108,7 +115,9 @@ async def personalize(payload: CustomerSignals) -> tuple[PricingResponse, dict]:
     conv_list = model.conversion_proba(signals, 1.0)
     conv_ms = round((time.perf_counter() - t0) * 1000, 3)
 
-    # ---- 5. deterministic pricing engine ----
+    # ---- 5. deterministic pricing engine (respects merchant config) ----
+    from .merchant_config import get_config
+
     decision = decide(
         list_price=payload.list_price,
         wtp_multiplier=wtp,
@@ -116,6 +125,8 @@ async def personalize(payload: CustomerSignals) -> tuple[PricingResponse, dict]:
         customer_signals=signals,
         shap_top=pred["shap_top"],
         model_confidence=pred["confidence"],
+        merchant_config=get_config(),
+        force_list_price=bool(getattr(payload, "force_list_price", False)),
     )
 
     total_ms = round((time.perf_counter() - t_start) * 1000, 3)
@@ -149,6 +160,11 @@ async def personalize(payload: CustomerSignals) -> tuple[PricingResponse, dict]:
         budget_ms=0,          # filled by the endpoint (knows the setting)
         budget_exceeded=False,  # filled by the endpoint
         timing_breakdown=timing,
+        offer_label=decision.offer_label,
+        offer_value_inr=decision.offer_value_inr,
+        is_markup=decision.is_markup,
+        standard_price=decision.standard_price,
+        net_vs_standard_inr=decision.net_vs_standard_inr,
     )
 
     db_record = {

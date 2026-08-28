@@ -120,8 +120,13 @@ export default function CheckoutPage({
           </div>
         )}
 
-        {phase === "reveal" && result && (
-          <PriceReveal result={result} sessionId={sessionId} />
+        {phase === "reveal" && result && session && (
+          <PriceReveal
+            result={result}
+            sessionId={sessionId}
+            config={session.config}
+            onResult={setResult}
+          />
         )}
       </div>
     </div>

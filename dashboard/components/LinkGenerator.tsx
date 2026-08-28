@@ -5,17 +5,21 @@ import { createSession } from "@/lib/api";
 import { PRESET_LABELS } from "@/lib/profiles";
 import type { CustomSessionFields, Preset, SessionCreateResponse } from "@/lib/types";
 import { CopyField } from "./CopyField";
+import { PaymentSplitEditor, type Split, evenSplit } from "./PaymentSplitEditor";
 
 const PRESETS: Preset[] = ["random", "high", "mid", "low", "custom"];
 const DEVICES = ["Android_budget", "Android_premium", "iPhone", "Desktop"] as const;
-const PAYMENTS = ["UPI", "Credit_Card", "Debit_Card", "COD", "Wallet"] as const;
 
-export function LinkGenerator({ onCreated }: { onCreated?: (s: SessionCreateResponse) => void }) {
+export function LinkGenerator({
+  onCreated,
+}: {
+  onCreated?: (s: SessionCreateResponse) => void;
+}) {
   const [preset, setPreset] = useState<Preset>("high");
-  const [custom, setCustom] = useState<CustomSessionFields>({
+  const [custom, setCustom] = useState<CustomSessionFields & { payment_split: Split }>({
     pin_code: "560001",
     device_type: "iPhone",
-    payment_method_preference: "UPI",
+    payment_split: evenSplit(),
     prepaid_orders: 20,
     return_rate: 0.1,
     vpn: false,
@@ -44,21 +48,14 @@ export function LinkGenerator({ onCreated }: { onCreated?: (s: SessionCreateResp
   const cfg = result?.config;
 
   return (
-    <section className="rounded-xl border border-brand/30 bg-white p-5 shadow-sm">
-      <div className="mb-3 flex items-center gap-2">
-        <span className="rounded-md bg-brand px-2 py-0.5 text-xs font-semibold text-white">
-          demo
-        </span>
-        <h2 className="text-base font-semibold text-ink">Generate Customer Link</h2>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-[280px_1fr]">
-        {/* left: controls */}
+    <div className="rounded-lg border border-zinc-200 bg-white p-4 shadow-card">
+      <div className="grid gap-5 md:grid-cols-[260px_1fr]">
+        {/* controls */}
         <div className="space-y-3">
           <label className="block">
-            <span className="text-xs font-medium text-slate-500">Default profile</span>
+            <span className="text-xs text-zinc-500">Profile</span>
             <select
-              className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm"
+              className="mt-1 w-full rounded-md border border-zinc-200 px-2 py-1.5 text-sm"
               value={preset}
               onChange={(e) => setPreset(e.target.value as Preset)}
             >
@@ -68,27 +65,27 @@ export function LinkGenerator({ onCreated }: { onCreated?: (s: SessionCreateResp
                 </option>
               ))}
             </select>
-            <span className="mt-1 block text-[11px] text-slate-400">
+            <span className="mt-1 block text-[11px] text-zinc-400">
               {PRESET_LABELS[preset].blurb}
             </span>
           </label>
 
           {preset === "custom" && (
-            <div className="space-y-2 rounded-lg bg-slate-50 p-3">
+            <div className="space-y-2.5 rounded-md bg-zinc-50 p-3">
               <label className="block">
-                <span className="text-[11px] text-slate-500">
-                  Pincode (auto-detects city tier)
+                <span className="text-[11px] text-zinc-500">
+                  Pincode (sets city tier)
                 </span>
                 <input
-                  className="mt-0.5 w-full rounded border border-slate-200 px-2 py-1 text-xs"
+                  className="mt-0.5 w-full rounded border border-zinc-200 px-2 py-1 text-xs"
                   value={custom.pin_code ?? ""}
                   onChange={(e) => setCustom({ ...custom, pin_code: e.target.value })}
-                  placeholder="e.g. 400001"
+                  placeholder="400001"
                 />
               </label>
 
-              <fieldset>
-                <span className="text-[11px] text-slate-500">Device type</span>
+              <div>
+                <span className="text-[11px] text-zinc-500">Device</span>
                 <div className="mt-0.5 flex flex-wrap gap-1">
                   {DEVICES.map((d) => (
                     <button
@@ -97,39 +94,29 @@ export function LinkGenerator({ onCreated }: { onCreated?: (s: SessionCreateResp
                       className={`rounded px-2 py-0.5 text-[11px] ring-1 ${
                         custom.device_type === d
                           ? "bg-brand text-white ring-brand"
-                          : "bg-white text-slate-600 ring-slate-200"
+                          : "bg-white text-zinc-600 ring-zinc-200"
                       }`}
                     >
                       {d}
                     </button>
                   ))}
                 </div>
-              </fieldset>
+              </div>
 
-              <fieldset>
-                <span className="text-[11px] text-slate-500">Payment preference</span>
-                <div className="mt-0.5 flex flex-wrap gap-1">
-                  {PAYMENTS.map((p) => (
-                    <button
-                      key={p}
-                      onClick={() =>
-                        setCustom({ ...custom, payment_method_preference: p })
-                      }
-                      className={`rounded px-2 py-0.5 text-[11px] ring-1 ${
-                        custom.payment_method_preference === p
-                          ? "bg-brand text-white ring-brand"
-                          : "bg-white text-slate-600 ring-slate-200"
-                      }`}
-                    >
-                      {p}
-                    </button>
-                  ))}
+              <div>
+                <span className="text-[11px] text-zinc-500">Payment mix</span>
+                <div className="mt-1">
+                  <PaymentSplitEditor
+                    value={custom.payment_split}
+                    onChange={(s) => setCustom({ ...custom, payment_split: s })}
+                    compact
+                  />
                 </div>
-              </fieldset>
+              </div>
 
               <label className="block">
-                <span className="text-[11px] text-slate-500">
-                  Past prepaid orders: {custom.prepaid_orders}
+                <span className="text-[11px] text-zinc-500">
+                  Prepaid orders: {custom.prepaid_orders}
                 </span>
                 <input
                   type="range"
@@ -139,12 +126,12 @@ export function LinkGenerator({ onCreated }: { onCreated?: (s: SessionCreateResp
                   onChange={(e) =>
                     setCustom({ ...custom, prepaid_orders: Number(e.target.value) })
                   }
-                  className="w-full"
+                  className="w-full accent-brand"
                 />
               </label>
 
               <label className="block">
-                <span className="text-[11px] text-slate-500">
+                <span className="text-[11px] text-zinc-500">
                   Return rate: {((custom.return_rate ?? 0) * 100).toFixed(0)}%
                 </span>
                 <input
@@ -156,17 +143,18 @@ export function LinkGenerator({ onCreated }: { onCreated?: (s: SessionCreateResp
                   onChange={(e) =>
                     setCustom({ ...custom, return_rate: Number(e.target.value) })
                   }
-                  className="w-full"
+                  className="w-full accent-brand"
                 />
               </label>
 
-              <label className="flex items-center gap-2 text-[11px] text-slate-600">
+              <label className="flex items-center gap-2 text-[11px] text-zinc-600">
                 <input
                   type="checkbox"
                   checked={!!custom.vpn}
                   onChange={(e) => setCustom({ ...custom, vpn: e.target.checked })}
+                  className="accent-brand"
                 />
-                VPN / public network
+                On a VPN / public network
               </label>
             </div>
           )}
@@ -174,38 +162,36 @@ export function LinkGenerator({ onCreated }: { onCreated?: (s: SessionCreateResp
           <button
             onClick={generate}
             disabled={loading}
-            className="w-full rounded-md bg-brand py-2 text-sm font-semibold text-white hover:bg-brand-dark disabled:opacity-60"
+            className="w-full rounded-md bg-brand py-2 text-sm font-medium text-white hover:bg-brand-dark disabled:opacity-60"
           >
-            {loading ? "generating…" : "Generate Link"}
+            {loading ? "generating…" : "Generate link"}
           </button>
           {err && <p className="text-xs text-red-600">{err}</p>}
         </div>
 
-        {/* right: result */}
-        <div className="rounded-lg border border-slate-100 bg-slate-50/60 p-4">
+        {/* result */}
+        <div className="rounded-md border border-zinc-100 bg-zinc-50/60 p-4">
           {!result ? (
-            <p className="text-xs text-slate-400">
-              Pick a profile and hit Generate — you&apos;ll get a shareable
-              checkout link, a merchant view link, and a QR code for the
-              phone demo.
+            <p className="text-xs text-zinc-400">
+              A shareable checkout link, a merchant-view link, and a QR code for
+              the phone demo will appear here.
             </p>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-[1fr_150px]">
+            <div className="grid gap-4 sm:grid-cols-[1fr_136px]">
               <div className="space-y-3">
                 <CopyField label="Customer link" value={result.customer_url} />
-                <CopyField label="Merchant view link" value={result.merchant_url} />
-                <div className="flex flex-wrap gap-1.5 text-[11px]">
+                <CopyField label="Merchant view" value={result.merchant_url} />
+                <div className="flex flex-wrap gap-1 text-[11px]">
                   <Tag>{PRESET_LABELS[result.preset as Preset]?.label ?? result.preset}</Tag>
-                  <Tag>Tier {cfg?.city_tier} · {cfg?.city}</Tag>
+                  <Tag>T{cfg?.city_tier} · {cfg?.city}</Tag>
                   <Tag>{cfg?.device_type}</Tag>
-                  <Tag>{cfg?.payment_method_preference}</Tag>
                   <Tag>trust {cfg?.cross_merchant_trust_score}</Tag>
                   <Tag>{cfg?.prepaid_orders} prepaid</Tag>
                   <Tag>{Math.round((cfg?.return_rate ?? 0) * 100)}% returns</Tag>
                   {cfg?.vpn && <Tag danger>VPN</Tag>}
                 </div>
-                <p className="text-[10px] text-slate-400">
-                  session {result.session_id} · segment {result.segment_key}
+                <p className="font-mono text-[10px] text-zinc-400">
+                  {result.session_id} · {result.segment_key}
                 </p>
               </div>
               {result.qr_code_base64 ? (
@@ -213,10 +199,10 @@ export function LinkGenerator({ onCreated }: { onCreated?: (s: SessionCreateResp
                 <img
                   src={result.qr_code_base64}
                   alt="Customer link QR"
-                  className="h-[150px] w-[150px] self-start rounded-md border border-slate-200 bg-white p-1"
+                  className="h-[136px] w-[136px] self-start rounded border border-zinc-200 bg-white p-1"
                 />
               ) : (
-                <div className="flex h-[150px] items-center justify-center rounded-md border border-dashed border-slate-300 text-[10px] text-slate-400">
+                <div className="flex h-[136px] items-center justify-center rounded border border-dashed border-zinc-300 text-[10px] text-zinc-400">
                   QR unavailable
                 </div>
               )}
@@ -224,17 +210,17 @@ export function LinkGenerator({ onCreated }: { onCreated?: (s: SessionCreateResp
           )}
         </div>
       </div>
-    </section>
+    </div>
   );
 }
 
 function Tag({ children, danger }: { children: React.ReactNode; danger?: boolean }) {
   return (
     <span
-      className={`rounded-full px-2 py-0.5 ring-1 ${
+      className={`rounded px-1.5 py-0.5 ring-1 ${
         danger
           ? "bg-red-50 text-red-700 ring-red-200"
-          : "bg-white text-slate-600 ring-slate-200"
+          : "bg-white text-zinc-600 ring-zinc-200"
       }`}
     >
       {children}

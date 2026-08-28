@@ -33,6 +33,12 @@ class CustomerSignals(BaseModel):
     pin_code: Optional[str] = None
     income_tier: Optional[Literal["low", "lower_mid", "mid", "upper_mid", "high"]] = None
     payment_method_preference: PaymentPref = "UPI"
+    # richer than a single favourite: {"UPI":0.4,"Credit_Card":0.4,"COD":0.2}.
+    # When present, the engine derives the preference (argmax) + trust signals
+    # from the whole mix.
+    payment_split: Optional[dict[str, float]] = None
+    # shopper clicked "prefer the standard price" - never price above list
+    force_list_price: bool = False
     time_of_day: Optional[Literal["morning", "afternoon", "evening", "night"]] = None
     hour: Optional[int] = Field(None, ge=0, le=23)
     day_of_week: Optional[Literal["weekday", "weekend"]] = None
@@ -100,6 +106,12 @@ class PricingResponse(BaseModel):
     budget_ms: int
     budget_exceeded: bool
     timing_breakdown: dict[str, float]
+    # customer-facing incentive framing
+    offer_label: str = ""
+    offer_value_inr: float = 0.0
+    is_markup: bool = False
+    standard_price: float = 0.0
+    net_vs_standard_inr: float = 0.0
 
 
 class SimulateRequest(BaseModel):
@@ -136,10 +148,24 @@ class CustomSessionFields(BaseModel):
     pin_code: Optional[str] = None
     device_type: Optional[DeviceType] = None
     payment_method_preference: Optional[PaymentPref] = None
+    payment_split: Optional[dict[str, float]] = None
     prepaid_orders: Optional[int] = Field(None, ge=0, le=50)
     return_rate: Optional[float] = Field(None, ge=0, le=0.5)
     vpn: Optional[bool] = None
     city_tier: Optional[Literal[1, 2, 3]] = None
+
+
+class MerchantConfigPatch(BaseModel):
+    """Partial update - only the fields present are changed."""
+    markup_enabled: Optional[bool] = None
+    max_markup_pct: Optional[float] = Field(None, ge=0, le=0.15)
+    max_discount_pct: Optional[float] = Field(None, ge=0, le=0.10)
+    cod_trust_min: Optional[float] = Field(None, ge=0, le=100)
+    cod_completion_min: Optional[float] = Field(None, ge=0, le=1)
+    instant_refund_trust_min: Optional[float] = Field(None, ge=0, le=100)
+    gross_margin: Optional[float] = Field(None, ge=0.05, le=0.9)
+    offers: Optional[dict[str, bool]] = None
+    trust_weights: Optional[dict[str, float]] = None
 
 
 class SessionCreateRequest(BaseModel):

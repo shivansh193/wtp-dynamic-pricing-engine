@@ -7,7 +7,12 @@
 }
 
 body {
-  @apply bg-slate-100 text-ink antialiased;
+  @apply bg-zinc-50 text-ink antialiased;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+::selection {
+  @apply bg-brand/20;
 }
 
 /* subtle reveal animation used when the personalised price appears */

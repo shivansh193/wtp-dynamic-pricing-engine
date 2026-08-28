@@ -78,3 +78,48 @@ def test_reasoning_references_top_two_shap_features():
                customer_signals=HIGH_TRUST, shap_top=SHAP, model_confidence="high")
     assert "device type" in d.reasoning
     assert "city tier" in d.reasoning
+
+
+def test_merchant_can_disable_markup():
+    from api.merchant_config import MerchantConfig
+
+    mc = MerchantConfig(markup_enabled=False)
+    d = decide(list_price=1000, wtp_multiplier=1.30, conversion_probability=0.8,
+               customer_signals=HIGH_TRUST, shap_top=SHAP, merchant_config=mc)
+    assert d.final_price <= 1000.0
+    assert d.price_delta_pct <= 0.0
+    assert d.is_markup is False
+
+
+def test_force_list_price_caps_at_list():
+    d = decide(list_price=1000, wtp_multiplier=1.30, conversion_probability=0.8,
+               customer_signals=HIGH_TRUST, shap_top=SHAP, force_list_price=True)
+    assert d.final_price == 1000.0
+    assert d.price_delta_pct == 0.0
+
+
+def test_disabled_offer_falls_back():
+    from api.merchant_config import MerchantConfig, OfferToggles
+
+    mc = MerchantConfig(offers=OfferToggles(extended_warranty=False, priority_support=False))
+    d = decide(list_price=4999, wtp_multiplier=1.20, conversion_probability=0.8,
+               customer_signals=HIGH_TRUST, shap_top=SHAP, merchant_config=mc)
+    assert d.offer_type not in ("extended_warranty", "priority_support")
+
+
+def test_markup_reports_incentive_fields():
+    d = decide(list_price=4999, wtp_multiplier=1.20, conversion_probability=0.8,
+               customer_signals=HIGH_TRUST, shap_top=SHAP)
+    assert d.is_markup is True
+    assert d.offer_label
+    assert d.offer_value_inr > 0
+    assert d.standard_price == 4999.0
+
+
+def test_payment_order_leads_with_customers_top_method():
+    sig = dict(HIGH_TRUST, payment_split={"COD": 0.6, "UPI": 0.3, "Credit_Card": 0.1},
+               payment_method_preference="COD", cross_merchant_trust_score=90,
+               cod_completion_rate=0.9)
+    d = decide(list_price=4999, wtp_multiplier=1.10, conversion_probability=0.7,
+               customer_signals=sig, shap_top=SHAP)
+    assert d.payment_methods_shown[0] == "COD"

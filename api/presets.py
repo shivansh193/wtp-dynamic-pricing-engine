@@ -69,41 +69,82 @@ def _clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 
 
+DEFAULT_SPLITS = {
+    1: {"UPI": 0.40, "Credit_Card": 0.34, "Debit_Card": 0.12, "COD": 0.04, "Wallet": 0.10},
+    2: {"UPI": 0.52, "Credit_Card": 0.14, "Debit_Card": 0.16, "COD": 0.12, "Wallet": 0.06},
+    3: {"UPI": 0.46, "Credit_Card": 0.04, "Debit_Card": 0.14, "COD": 0.30, "Wallet": 0.06},
+}
+
+
+def normalise_split(split: dict[str, float] | None, city_tier: int) -> dict[str, float]:
+    """Clean a payment-method-share dict: keep known methods, drop negatives,
+    renormalise to sum 1. Falls back to a tier-typical mix."""
+    if not split:
+        return dict(DEFAULT_SPLITS[city_tier])
+    clean = {m: max(0.0, float(split.get(m, 0.0))) for m in PAYMENTS}
+    total = sum(clean.values())
+    if total <= 1e-6:
+        return dict(DEFAULT_SPLITS[city_tier])
+    return {m: round(v / total, 4) for m, v in clean.items()}
+
+
 def derive_signals(
     *,
     city_tier: int,
     device_type: str,
-    payment_method_preference: str,
+    payment_method_preference: str | None = None,
+    payment_split: dict[str, float] | None = None,
     prepaid_orders: int,
     return_rate: float,
     vpn: bool,
     pin_code: str | None,
+    weights: "TrustWeights | None" = None,
 ) -> dict[str, Any]:
-    """Turn the demo-form knobs into a full CustomerSignals-compatible dict."""
+    """Turn the demo-form knobs into a full CustomerSignals-compatible dict.
+
+    `payment_split` (method -> share, need not sum to 1) is the richer input:
+    the *mix* of how a shopper pays feeds the trust score and COD reliability,
+    not just their single favourite method. `payment_method_preference` is
+    derived as the argmax and is what the pricing engine uses to order the
+    checkout's payment buttons.
+    """
+    from .merchant_config import TrustWeights, get_config
+
+    w = weights or (get_config().trust_weights if weights is None else TrustWeights())
     prepaid_orders = int(_clamp(prepaid_orders, 0, 50))
     return_rate = float(_clamp(return_rate, 0.0, 0.5))
 
+    split = normalise_split(payment_split, city_tier)
+    if not payment_method_preference:
+        payment_method_preference = max(split, key=split.get)
+    cc_share = split.get("Credit_Card", 0.0)
+    cod_share = split.get("COD", 0.0)
+
     # behavioural derivations
     num_merchants = int(_clamp(round(prepaid_orders * 0.55) + 1, 1, 50))
-    payment_success = _clamp(0.80 + prepaid_orders * 0.0040, 0.80, 0.995)
-    # COD completion is mostly about the shopper's own delivery-acceptance habit;
-    # a COD-native shopper who keeps ordering COD is a reliable COD customer.
+    payment_success = _clamp(
+        0.80 + prepaid_orders * 0.0040 + cc_share * 0.05 - cod_share * 0.03,
+        0.75, 0.995,
+    )
+    # COD completion tracks the shopper's own delivery-acceptance habit - a
+    # shopper who pays COD a lot AND keeps ordering is a reliable COD customer.
     cod_completion = _clamp(
         {1: 0.94, 2: 0.88, 3: 0.82}[city_tier]
         + prepaid_orders * 0.0025
         - return_rate * 0.15
-        + (0.03 if payment_method_preference == "COD" else 0.0),
+        + cod_share * 0.10,
         0.45, 0.995,
     )
     account_age_days = int(_clamp(60 + prepaid_orders * 34, 30, 1800))
 
     trust = (
-        44
-        + prepaid_orders * 1.10
-        - return_rate * 100 * 0.50
-        + {1: 6, 2: 0, 3: -4}[city_tier]
-        + (8 if payment_method_preference == "Credit_Card" else 0)
-        - (26 if vpn else 0)
+        w.base
+        + prepaid_orders * w.w_prepaid_order
+        - return_rate * 100 * w.w_return_rate
+        + cc_share * w.w_credit_card_share
+        - cod_share * w.w_cod_share
+        + {1: w.tier1_adj, 2: 0.0, 3: w.tier3_adj}[city_tier]
+        - (w.w_vpn_penalty if vpn else 0.0)
     )
     trust = _clamp(trust, 1, 99)
 
@@ -121,6 +162,7 @@ def derive_signals(
         "income_tier": income_tier,
         "device_type": device_type,
         "payment_method_preference": payment_method_preference,
+        "payment_split": split,
         "referral_source": "organic",
         "prepaid_orders": prepaid_orders,
         "vpn": bool(vpn),
@@ -139,12 +181,18 @@ def derive_signals(
 # The four fixed presets
 # --------------------------------------------------------------------------- #
 _FIXED = {
-    "high": dict(city_tier=1, device_type="iPhone", payment_method_preference="Credit_Card",
-                 prepaid_orders=44, return_rate=0.04, vpn=False, pin_code="400001"),
-    "mid": dict(city_tier=2, device_type="Android_premium", payment_method_preference="UPI",
-                prepaid_orders=20, return_rate=0.12, vpn=False, pin_code="302001"),
-    "low": dict(city_tier=3, device_type="Android_budget", payment_method_preference="COD",
-                prepaid_orders=3, return_rate=0.30, vpn=False, pin_code="800001"),
+    "high": dict(city_tier=1, device_type="iPhone", prepaid_orders=44, return_rate=0.04,
+                 vpn=False, pin_code="400001",
+                 payment_split={"UPI": 0.25, "Credit_Card": 0.60, "Debit_Card": 0.05,
+                                "COD": 0.02, "Wallet": 0.08}),
+    "mid": dict(city_tier=2, device_type="Android_premium", prepaid_orders=20, return_rate=0.12,
+                vpn=False, pin_code="302001",
+                payment_split={"UPI": 0.55, "Credit_Card": 0.18, "Debit_Card": 0.15,
+                               "COD": 0.08, "Wallet": 0.04}),
+    "low": dict(city_tier=3, device_type="Android_budget", prepaid_orders=3, return_rate=0.30,
+                vpn=False, pin_code="800001",
+                payment_split={"UPI": 0.34, "Credit_Card": 0.02, "Debit_Card": 0.10,
+                               "COD": 0.50, "Wallet": 0.04}),
 }
 
 DEVICES = ["Android_budget", "Android_premium", "iPhone", "Desktop"]
@@ -159,16 +207,16 @@ def _random_config(rng: random.Random) -> dict[str, Any]:
         weights={1: [0.15, 0.30, 0.35, 0.20], 2: [0.40, 0.35, 0.10, 0.15],
                  3: [0.62, 0.22, 0.04, 0.12]}[tier],
     )[0]
-    payment = rng.choices(
-        PAYMENTS,
-        weights={1: [0.40, 0.30, 0.12, 0.06, 0.12], 2: [0.50, 0.14, 0.15, 0.14, 0.07],
-                 3: [0.44, 0.05, 0.14, 0.31, 0.06]}[tier],
-    )[0]
+    # a randomised payment mix around the tier-typical split
+    base = DEFAULT_SPLITS[tier]
+    split = {m: max(0.0, rng.gauss(base[m], 0.08)) for m in PAYMENTS}
+    s = sum(split.values()) or 1.0
+    split = {m: round(v / s, 3) for m, v in split.items()}
     prepaid = int(rng.triangular(0, 50, {1: 32, 2: 16, 3: 5}[tier]))
     ret = round(_clamp(rng.gauss({1: 0.06, 2: 0.13, 3: 0.28}[tier], 0.05), 0.0, 0.5), 3)
     vpn = rng.random() < 0.08
     pin = _TIER_SAMPLE_PIN[tier][:3] + f"{rng.randint(1, 99):03d}"
-    return dict(city_tier=tier, device_type=device, payment_method_preference=payment,
+    return dict(city_tier=tier, device_type=device, payment_split=split,
                 prepaid_orders=prepaid, return_rate=ret, vpn=vpn, pin_code=pin)
 
 
@@ -197,9 +245,15 @@ def build_config(preset: str, custom: dict[str, Any] | None = None,
     if custom.get("pin_code"):
         base["pin_code"] = str(custom["pin_code"])
         base["city_tier"] = city_tier_from_pincode(base["pin_code"])
-    for k in ("device_type", "payment_method_preference"):
-        if custom.get(k):
-            base[k] = custom[k]
+    if custom.get("device_type"):
+        base["device_type"] = custom["device_type"]
+    if custom.get("payment_split"):
+        base["payment_split"] = custom["payment_split"]
+        base.pop("payment_method_preference", None)
+    elif custom.get("payment_method_preference"):
+        # single method chosen -> treat as a 100% split of that method
+        base["payment_split"] = {custom["payment_method_preference"]: 1.0}
+        base.pop("payment_method_preference", None)
     if custom.get("prepaid_orders") is not None:
         base["prepaid_orders"] = int(custom["prepaid_orders"])
     if custom.get("return_rate") is not None:
@@ -212,7 +266,8 @@ def build_config(preset: str, custom: dict[str, Any] | None = None,
     cfg = derive_signals(
         city_tier=base["city_tier"],
         device_type=base["device_type"],
-        payment_method_preference=base["payment_method_preference"],
+        payment_method_preference=base.get("payment_method_preference"),
+        payment_split=base.get("payment_split"),
         prepaid_orders=base["prepaid_orders"],
         return_rate=base["return_rate"],
         vpn=base["vpn"],

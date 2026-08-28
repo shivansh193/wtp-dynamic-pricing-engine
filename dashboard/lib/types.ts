@@ -10,6 +10,8 @@ export interface CustomerSignals {
   pin_code?: string;
   income_tier?: "low" | "lower_mid" | "mid" | "upper_mid" | "high";
   payment_method_preference: "UPI" | "Credit_Card" | "Debit_Card" | "COD" | "Wallet";
+  payment_split?: Record<string, number>;
+  force_list_price?: boolean;
   referral_source: "organic" | "paid_ad" | "social" | "email" | "influencer";
   cross_merchant_trust_score: number;
   return_rate: number;
@@ -21,6 +23,14 @@ export interface CustomerSignals {
   ip_type?: string | null;
   ip_trust_multiplier?: number | null;
 }
+
+export const PAYMENT_METHODS = [
+  "UPI",
+  "Credit_Card",
+  "Debit_Card",
+  "COD",
+  "Wallet",
+] as const;
 
 export interface ShapFeature {
   feature: string;
@@ -60,6 +70,11 @@ export interface PricingResponse {
   budget_ms: number;
   budget_exceeded: boolean;
   timing_breakdown: Record<string, number>;
+  offer_label: string;
+  offer_value_inr: number;
+  is_markup: boolean;
+  standard_price: number;
+  net_vs_standard_inr: number;
 }
 
 export interface MetricsResponse {
@@ -90,6 +105,7 @@ export interface CustomSessionFields {
   pin_code?: string;
   device_type?: CustomerSignals["device_type"];
   payment_method_preference?: CustomerSignals["payment_method_preference"];
+  payment_split?: Record<string, number>;
   prepaid_orders?: number;
   return_rate?: number;
   vpn?: boolean;
@@ -105,6 +121,7 @@ export interface SessionConfig {
   income_tier: string;
   device_type: CustomerSignals["device_type"];
   payment_method_preference: CustomerSignals["payment_method_preference"];
+  payment_split?: Record<string, number>;
   referral_source: string;
   prepaid_orders: number;
   vpn: boolean;
@@ -184,6 +201,35 @@ export interface RevenueSim {
   n_decisions?: number;
   note?: string;
   caveat?: string;
+}
+
+export interface MerchantConfig {
+  markup_enabled: boolean;
+  max_markup_pct: number;
+  max_discount_pct: number;
+  cod_trust_min: number;
+  cod_completion_min: number;
+  cod_pref_trust_min: number;
+  cod_pref_completion_min: number;
+  instant_refund_trust_min: number;
+  gross_margin: number;
+  offers: {
+    extended_warranty: boolean;
+    priority_support: boolean;
+    free_delivery: boolean;
+    cashback_5pct: boolean;
+    instant_refund: boolean;
+  };
+  trust_weights: {
+    base: number;
+    w_prepaid_order: number;
+    w_return_rate: number;
+    w_credit_card_share: number;
+    w_cod_share: number;
+    w_vpn_penalty: number;
+    tier1_adj: number;
+    tier3_adj: number;
+  };
 }
 
 export interface WsMessage {

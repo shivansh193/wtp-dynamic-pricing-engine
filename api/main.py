@@ -53,6 +53,10 @@ from .schemas import (
     SimulateRequest,
     SimulateResponse,
 )
+from .merchant_config import get_config as get_merchant_config
+from .merchant_config import reset_config as reset_merchant_config
+from .merchant_config import update_config as update_merchant_config
+from .schemas import MerchantConfigPatch
 from .segment_stats import posterior as segment_posterior
 from .service import personalize, simulate
 from .sessions import session_store
@@ -316,6 +320,22 @@ async def session_create(req: SessionCreateRequest) -> SessionCreateResponse:
     )
 
 
+@app.get("/merchant/config")
+async def merchant_config_get() -> dict:
+    return get_merchant_config().to_dict()
+
+
+@app.put("/merchant/config")
+async def merchant_config_put(patch: MerchantConfigPatch) -> dict:
+    updated = update_merchant_config(patch.model_dump(exclude_none=True))
+    return updated.to_dict()
+
+
+@app.post("/merchant/config/reset")
+async def merchant_config_reset() -> dict:
+    return reset_merchant_config().to_dict()
+
+
 @app.post("/config/derive")
 async def config_derive(body: dict) -> dict:
     """Re-derive a full customer config from the raw checkout-form knobs
@@ -327,6 +347,7 @@ async def config_derive(body: dict) -> dict:
             "pin_code": body.get("pin_code"),
             "device_type": body.get("device_type"),
             "payment_method_preference": body.get("payment_method_preference"),
+            "payment_split": body.get("payment_split"),
             "prepaid_orders": body.get("prepaid_orders"),
             "return_rate": body.get("return_rate"),
             "vpn": body.get("vpn"),
@@ -428,7 +449,7 @@ def _seg_key(decision_row: dict) -> str:
 def _segment_revenue(seg_rows: list[dict]) -> dict:
     import json as _json
 
-    gm = settings.GROSS_MARGIN
+    gm = get_merchant_config().gross_margin
     rev_wtp = rev_flat = mgn_wtp = mgn_flat = 0.0
     for r in seg_rows:
         sv = r.get("shap_values")

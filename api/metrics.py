@@ -61,9 +61,9 @@ def compute_metrics(rows: list[dict]) -> dict:
     mgn_wtp = 0.0
     mgn_flat = 0.0
     try:
-        from .config import settings as _s
+        from .merchant_config import get_config as _mc
 
-        GROSS_MARGIN = _s.GROSS_MARGIN
+        GROSS_MARGIN = _mc().gross_margin
     except Exception:  # noqa: BLE001
         GROSS_MARGIN = 0.45
 

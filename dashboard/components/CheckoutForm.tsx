@@ -4,14 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import { deriveConfig } from "@/lib/api";
 import { PRODUCT } from "@/lib/profiles";
 import type { SessionConfig } from "@/lib/types";
+import { PaymentSplitEditor, type Split, evenSplit } from "./PaymentSplitEditor";
 
 const DEVICES = ["Android_budget", "Android_premium", "iPhone", "Desktop"] as const;
-const PAYMENTS = ["UPI", "Credit_Card", "Debit_Card", "COD", "Wallet"] as const;
 
 export interface Knobs {
   pin_code: string;
   device_type: (typeof DEVICES)[number];
-  payment_method_preference: (typeof PAYMENTS)[number];
+  payment_split: Split;
   prepaid_orders: number;
   return_rate: number;
   vpn: boolean;
@@ -29,7 +29,7 @@ export function CheckoutForm({
   const [knobs, setKnobs] = useState<Knobs>({
     pin_code: initial.pin_code,
     device_type: initial.device_type,
-    payment_method_preference: initial.payment_method_preference,
+    payment_split: (initial.payment_split as Split) ?? evenSplit(),
     prepaid_orders: initial.prepaid_orders,
     return_rate: initial.return_rate,
     vpn: initial.vpn,
@@ -37,12 +37,18 @@ export function CheckoutForm({
   const [derived, setDerived] = useState<SessionConfig>(initial);
   const timer = useRef<ReturnType<typeof setTimeout>>();
 
-  // re-derive the behavioural signals whenever a knob changes (debounced)
   useEffect(() => {
     clearTimeout(timer.current);
     timer.current = setTimeout(async () => {
       try {
-        const r = await deriveConfig(knobs);
+        const r = await deriveConfig({
+          pin_code: knobs.pin_code,
+          device_type: knobs.device_type,
+          payment_split: knobs.payment_split,
+          prepaid_orders: knobs.prepaid_orders,
+          return_rate: knobs.return_rate,
+          vpn: knobs.vpn,
+        });
         setDerived(r.config as SessionConfig);
       } catch {
         /* keep last */
@@ -64,7 +70,9 @@ export function CheckoutForm({
           <p className="text-xs text-slate-500">
             {PRODUCT.brand} · sold by {PRODUCT.seller}
           </p>
-          <p className="text-xs text-slate-400">MRP ₹{PRODUCT.list_price.toLocaleString("en-IN")}</p>
+          <p className="text-xs text-slate-400">
+            MRP ₹{PRODUCT.list_price.toLocaleString("en-IN")}
+          </p>
         </div>
       </div>
 
@@ -93,14 +101,19 @@ export function CheckoutForm({
             value={knobs.device_type}
             onChange={(v) => set({ device_type: v as Knobs["device_type"] })}
           />
-          <Radio
-            label="Preferred payment"
-            options={PAYMENTS as unknown as string[]}
-            value={knobs.payment_method_preference}
-            onChange={(v) =>
-              set({ payment_method_preference: v as Knobs["payment_method_preference"] })
-            }
-          />
+
+          <div>
+            <span className="text-xs font-medium text-slate-600">
+              How you usually pay
+            </span>
+            <div className="mt-1.5">
+              <PaymentSplitEditor
+                value={knobs.payment_split}
+                onChange={(s) => set({ payment_split: s })}
+                compact
+              />
+            </div>
+          </div>
 
           <label className="block">
             <span className="text-xs font-medium text-slate-600">
@@ -112,7 +125,7 @@ export function CheckoutForm({
               max={50}
               value={knobs.prepaid_orders}
               onChange={(e) => set({ prepaid_orders: Number(e.target.value) })}
-              className="w-full"
+              className="w-full accent-brand"
             />
           </label>
 
@@ -127,7 +140,7 @@ export function CheckoutForm({
               step={0.01}
               value={knobs.return_rate}
               onChange={(e) => set({ return_rate: Number(e.target.value) })}
-              className="w-full"
+              className="w-full accent-brand"
             />
           </label>
 
@@ -159,7 +172,7 @@ export function CheckoutForm({
             · COD completion {(derived.cod_completion_rate * 100).toFixed(0)}%
             {knobs.vpn && (
               <span className="ml-1 rounded bg-red-50 px-1 text-red-600">
-                VPN — trust multiplier applied
+                VPN — trust reduced
               </span>
             )}
           </div>

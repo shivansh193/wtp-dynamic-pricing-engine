@@ -75,6 +75,7 @@ export function inr(n: number | null | undefined): string {
 export function signalsFromConfig(
   cfg: Record<string, any>,
   sessionId?: string,
+  opts?: { forceListPrice?: boolean },
 ): Partial<CustomerSignals> & { list_price: number } {
   return {
     session_id: sessionId,
@@ -87,6 +88,8 @@ export function signalsFromConfig(
     income_tier: cfg.income_tier,
     device_type: cfg.device_type,
     payment_method_preference: cfg.payment_method_preference,
+    payment_split: cfg.payment_split,
+    force_list_price: opts?.forceListPrice ?? false,
     referral_source: cfg.referral_source ?? "organic",
     return_rate: cfg.return_rate,
     payment_success_rate: cfg.payment_success_rate,

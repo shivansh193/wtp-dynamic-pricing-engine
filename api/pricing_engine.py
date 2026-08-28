@@ -43,6 +43,18 @@ ALL_OFFERS = [
     OFFER_NUDGE_SOFT, OFFER_NUDGE_HARD, "priority_support",
 ]
 
+# indicative rupee value of each perk, shown to the shopper so a higher price
+# never looks unexplained ("₹5,749 — includes a ₹899 warranty").
+OFFER_VALUE_INR = {
+    OFFER_PREMIUM_HIGH: 899.0,        # 1-yr extended warranty
+    OFFER_PREMIUM_MID: 499.0,         # priority support
+    "priority_support": 499.0,
+    OFFER_NUDGE_SOFT: 99.0,           # free delivery
+    OFFER_NUDGE_HARD: None,           # cashback = 5% of final price, computed live
+    OFFER_NEUTRAL: 0.0,
+}
+
+# defaults - overridable per merchant via api/merchant_config.py
 COD_TRUST_MIN = 60.0
 COD_COMPLETION_MIN = 0.80
 # a COD-native shopper with a solid delivery-acceptance record earns COD even at
@@ -96,6 +108,12 @@ class PricingDecision:
     confidence: str
     latency_ms: float = 0.0
     caps_applied: list[str] = field(default_factory=list)
+    # customer-facing incentive framing
+    offer_label: str = ""
+    offer_value_inr: float = 0.0            # indicative rupee value of the perk
+    is_markup: bool = False
+    standard_price: float = 0.0             # list price - the "no thanks" option
+    net_vs_standard_inr: float = 0.0        # (offer value) - (price delta); >0 = shopper ahead
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -110,82 +128,101 @@ def _direction_phrase(shap_value: float) -> str:
     return "pushing the price up" if shap_value > 0 else "pulling the price down"
 
 
-def _price_with_caps(list_price: float, wtp_multiplier: float) -> tuple[float, float, list[str]]:
+def _price_with_caps(list_price: float, wtp_multiplier: float,
+                     cap_up: float = PRICE_CAP_UP,
+                     cap_down: float = PRICE_CAP_DOWN) -> tuple[float, float, list[str]]:
     raw_mult = wtp_multiplier
     caps: list[str] = []
     eff = raw_mult
-    if eff > 1 + PRICE_CAP_UP:
-        eff = 1 + PRICE_CAP_UP
-        caps.append(f"capped at +{PRICE_CAP_UP:.0%} (WTP wanted {raw_mult:.3f})")
-    if eff < 1 + PRICE_CAP_DOWN:
-        eff = 1 + PRICE_CAP_DOWN
-        caps.append(f"floored at {PRICE_CAP_DOWN:.0%} (WTP wanted {raw_mult:.3f})")
+    if eff > 1 + cap_up:
+        eff = 1 + cap_up
+        caps.append(f"capped at +{cap_up:.0%} (model wanted {raw_mult:.3f})")
+    if eff < 1 + cap_down:
+        eff = 1 + cap_down
+        caps.append(f"floored at {cap_down:.0%} (model wanted {raw_mult:.3f})")
     final = round(list_price * eff, 2)
     return final, eff, caps
 
 
-def _choose_offer(eff_mult: float, conversion_probability: float | None) -> tuple[str, str]:
-    """High WTP -> premium experience. Low WTP / weak conversion -> discount nudge."""
+_DISCOUNT_FALLBACK = [OFFER_NUDGE_SOFT, OFFER_NUDGE_HARD, OFFER_NEUTRAL]
+_PREMIUM_FALLBACK = [OFFER_PREMIUM_HIGH, OFFER_PREMIUM_MID, "priority_support", OFFER_NEUTRAL]
+
+
+def _first_allowed(candidates: list[str], allowed) -> str:
+    for c in candidates:
+        if c == OFFER_NEUTRAL or allowed is None or allowed(c):
+            return c
+    return OFFER_NEUTRAL
+
+
+def _choose_offer(eff_mult: float, conversion_probability: float | None,
+                  allowed=None) -> tuple[str, str]:
+    """High WTP -> premium experience. Low WTP / weak conversion -> discount nudge.
+    `allowed(offer)->bool` filters to the merchant-enabled perks."""
     weak_conv = conversion_probability is not None and conversion_probability < WEAK_CONVERSION
 
     if eff_mult >= 1.08:
-        offer = OFFER_PREMIUM_HIGH
+        offer = _first_allowed(_PREMIUM_FALLBACK, allowed)
         why = "high willingness to pay - reinforce value with a premium-experience perk"
     elif eff_mult >= 1.03:
-        offer = OFFER_PREMIUM_MID
+        offer = _first_allowed(_PREMIUM_FALLBACK[1:], allowed)
         why = "above-list willingness to pay - add a service perk rather than a discount"
     elif eff_mult > 0.97:
         if weak_conv:
-            offer = OFFER_NUDGE_SOFT
-            why = "list-price shopper but soft conversion odds - a delivery sweetener nudges checkout"
+            offer = _first_allowed(_DISCOUNT_FALLBACK, allowed)
+            why = "list-price shopper but soft conversion odds - a small sweetener nudges checkout"
         else:
             offer = OFFER_NEUTRAL
             why = "priced at list with healthy conversion odds - no offer needed"
     elif eff_mult > 0.93:
-        offer = OFFER_NUDGE_SOFT
-        why = "modest price sensitivity - free delivery closes the gap without margin loss"
+        offer = _first_allowed(_DISCOUNT_FALLBACK, allowed)
+        why = "modest price sensitivity - a light nudge closes the gap without margin loss"
     else:
-        offer = OFFER_NUDGE_HARD
-        why = "high price sensitivity - a 5% cashback is the most effective conversion nudge"
+        offer = _first_allowed([OFFER_NUDGE_HARD, OFFER_NUDGE_SOFT, OFFER_NEUTRAL], allowed)
+        why = "high price sensitivity - a cashback nudge is the most effective here"
 
-    # weak conversion always at least gets a soft nudge
     if weak_conv and offer in (OFFER_NEUTRAL, OFFER_PREMIUM_MID):
-        offer = OFFER_NUDGE_SOFT
+        offer = _first_allowed(_DISCOUNT_FALLBACK, allowed)
         why += "; downgraded to a nudge because conversion probability is weak"
     return offer, why
 
 
 def _payment_order(signals: dict, eff_mult: float, cod_eligible: bool) -> list[str]:
-    """Personalised, ordered payment method list."""
+    """Personalised, ordered payment method list.
+
+    Starts from the shopper's *own* payment mix (their most-used method first),
+    then fills the rest with a WTP-tilted ordering: a high-WTP shopper sees
+    card/EMI options promoted, a price-sensitive one sees UPI/COD promoted.
+    """
+    split = signals.get("payment_split") or {}
     pref = signals.get("payment_method_preference")
+
+    # the shopper's methods, most-used first (only those they actually use)
+    used = [m for m, s in sorted(split.items(), key=lambda kv: kv[1], reverse=True)
+            if s and s > 0.02]
+    if pref and pref not in used:
+        used.insert(0, pref)
+
     if eff_mult >= 1.03:
-        # high WTP: lead with credit card (higher ticket, EMI, rewards)
-        order = ["Credit_Card", "UPI", "Wallet", "Debit_Card"]
+        tilt = ["Credit_Card", "UPI", "Wallet", "Debit_Card", "COD"]
     elif eff_mult <= 0.97:
-        # low WTP: lead with the friction-free / cash options
-        order = ["UPI", "COD", "Wallet", "Debit_Card", "Credit_Card"]
+        tilt = ["UPI", "COD", "Wallet", "Debit_Card", "Credit_Card"]
     else:
-        order = ["UPI", "Credit_Card", "Wallet", "Debit_Card"]
+        tilt = ["UPI", "Credit_Card", "Wallet", "Debit_Card", "COD"]
 
-    if cod_eligible and "COD" not in order:
+    order = list(used) + [m for m in tilt if m not in used]
+
+    if not cod_eligible:
+        order = [m for m in order if m != "COD"]
+    elif "COD" not in order:
         order.append("COD")
-    if not cod_eligible and "COD" in order:
-        order.remove("COD")
 
-    # always surface the customer's own preferred method near the top
-    if pref and pref in order:
-        order.remove(pref)
-        order.insert(0 if eff_mult <= 0.97 else 1, pref)
-    elif pref == "COD" and cod_eligible:
-        order.insert(0, "COD")
-
-    # de-dup while preserving order
     seen, out = set(), []
     for m in order:
-        if m not in seen:
+        if m and m not in seen:
             out.append(m)
             seen.add(m)
-    return out
+    return out[:5]
 
 
 def _build_reasoning(
@@ -232,6 +269,16 @@ def _inr(x: float) -> str:
 
 
 # --------------------------------------------------------------------------- #
+OFFER_LABELS = {
+    OFFER_PREMIUM_HIGH: "Free 1-year extended warranty",
+    OFFER_PREMIUM_MID: "Priority customer support",
+    "priority_support": "Priority customer support",
+    OFFER_NUDGE_SOFT: "Free delivery",
+    OFFER_NUDGE_HARD: "5% cashback",
+    OFFER_NEUTRAL: "",
+}
+
+
 def decide(
     *,
     list_price: float,
@@ -240,25 +287,51 @@ def decide(
     customer_signals: dict,
     shap_top: list[dict] | None = None,
     model_confidence: str = "medium",
+    merchant_config: Any = None,
+    force_list_price: bool = False,
 ) -> PricingDecision:
     t0 = time.perf_counter()
+    mc = merchant_config
+    if mc is None:
+        from .merchant_config import get_config
+
+        mc = get_config()
 
     trust = float(customer_signals.get("cross_merchant_trust_score", 50) or 50)
     cod_rate = float(customer_signals.get("cod_completion_rate", 0.0) or 0.0)
 
-    final_price, eff_mult, caps = _price_with_caps(list_price, wtp_multiplier)
+    # "prefer standard price" -> never price above list for this request
+    raw_mult = float(wtp_multiplier)
+    if force_list_price:
+        raw_mult = min(raw_mult, 1.0)
+
+    cap_up, cap_down = mc.effective_caps()
+    final_price, eff_mult, caps = _price_with_caps(list_price, raw_mult, cap_up, cap_down)
     delta_pct = (final_price / list_price - 1.0) * 100.0 if list_price else 0.0
+    is_markup = delta_pct > 0.05
 
     prefers_cod = customer_signals.get("payment_method_preference") == "COD"
-    cod_eligible = (trust > COD_TRUST_MIN and cod_rate > COD_COMPLETION_MIN) or (
-        prefers_cod and trust > COD_PREF_TRUST_MIN and cod_rate > COD_PREF_COMPLETION_MIN
+    cod_eligible = (trust > mc.cod_trust_min and cod_rate > mc.cod_completion_min) or (
+        prefers_cod and trust > mc.cod_pref_trust_min and cod_rate > mc.cod_pref_completion_min
     )
-    instant_refund_eligible = trust > INSTANT_REFUND_TRUST_MIN
+    instant_refund_eligible = bool(
+        mc.offers.instant_refund and trust > mc.instant_refund_trust_min
+    )
 
-    offer_type, offer_rationale = _choose_offer(eff_mult, conversion_probability)
+    offer_type, offer_rationale = _choose_offer(
+        eff_mult, conversion_probability, allowed=mc.offers.allowed
+    )
+
+    # customer-facing incentive value
+    if offer_type == OFFER_NUDGE_HARD:
+        offer_value = round(final_price * 0.05, 2)
+    else:
+        offer_value = float(OFFER_VALUE_INR.get(offer_type) or 0.0)
+    price_delta_inr = round(final_price - list_price, 2)
+    net_vs_standard = round(offer_value - max(0.0, price_delta_inr), 2)
+
     payment_methods = _payment_order(customer_signals, eff_mult, cod_eligible)
 
-    # confidence: start from the model, downgrade on thin/edge inputs
     confidence = model_confidence
     if caps and confidence == "high":
         confidence = "medium"
@@ -284,6 +357,11 @@ def decide(
         reasoning=reasoning,
         confidence=confidence,
         caps_applied=caps,
+        offer_label=OFFER_LABELS.get(offer_type, ""),
+        offer_value_inr=offer_value,
+        is_markup=is_markup,
+        standard_price=round(float(list_price), 2),
+        net_vs_standard_inr=net_vs_standard,
         latency_ms=round((time.perf_counter() - t0) * 1000, 4),
     )
     return decision

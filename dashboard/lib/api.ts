@@ -1,6 +1,7 @@
 import type {
   CustomSessionFields,
   CustomerSignals,
+  MerchantConfig,
   MetricsResponse,
   Preset,
   PricingResponse,
@@ -86,6 +87,7 @@ export function deriveConfig(knobs: {
   pin_code?: string;
   device_type?: string;
   payment_method_preference?: string;
+  payment_split?: Record<string, number>;
   prepaid_orders?: number;
   return_rate?: number;
   vpn?: boolean;
@@ -116,4 +118,20 @@ export function completeSession(sessionId: string) {
 
 export function getSegmentStats(segmentKey: string) {
   return jsonFetch<SegmentStats>(`/segment/stats/${encodeURIComponent(segmentKey)}`);
+}
+
+// ---- merchant pricing rules ----
+export function getMerchantConfig() {
+  return jsonFetch<MerchantConfig>("/merchant/config");
+}
+
+export function updateMerchantConfig(patch: Partial<MerchantConfig>) {
+  return jsonFetch<MerchantConfig>("/merchant/config", {
+    method: "PUT",
+    body: JSON.stringify(patch),
+  });
+}
+
+export function resetMerchantConfig() {
+  return jsonFetch<MerchantConfig>("/merchant/config/reset", { method: "POST" });
 }
