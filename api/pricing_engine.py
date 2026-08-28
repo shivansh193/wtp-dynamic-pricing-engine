@@ -45,6 +45,10 @@ ALL_OFFERS = [
 
 COD_TRUST_MIN = 60.0
 COD_COMPLETION_MIN = 0.80
+# a COD-native shopper with a solid delivery-acceptance record earns COD even at
+# a lower cross-merchant trust score (they just don't transact on cards much)
+COD_PREF_TRUST_MIN = 25.0
+COD_PREF_COMPLETION_MIN = 0.75
 INSTANT_REFUND_TRUST_MIN = 80.0
 WEAK_CONVERSION = 0.40
 
@@ -245,7 +249,10 @@ def decide(
     final_price, eff_mult, caps = _price_with_caps(list_price, wtp_multiplier)
     delta_pct = (final_price / list_price - 1.0) * 100.0 if list_price else 0.0
 
-    cod_eligible = trust > COD_TRUST_MIN and cod_rate > COD_COMPLETION_MIN
+    prefers_cod = customer_signals.get("payment_method_preference") == "COD"
+    cod_eligible = (trust > COD_TRUST_MIN and cod_rate > COD_COMPLETION_MIN) or (
+        prefers_cod and trust > COD_PREF_TRUST_MIN and cod_rate > COD_PREF_COMPLETION_MIN
+    )
     instant_refund_eligible = trust > INSTANT_REFUND_TRUST_MIN
 
     offer_type, offer_rationale = _choose_offer(eff_mult, conversion_probability)

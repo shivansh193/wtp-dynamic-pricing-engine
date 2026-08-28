@@ -58,10 +58,34 @@ echo "== GET /enrich/185.220.101.1  (known Tor exit) =="
 E=$(curl -s "$API/enrich/185.220.101.1")
 echo "$E" | grep -q '"ip_type":"tor"' && ok "enrich detects Tor" || no "enrich tor failed: $E"
 
+echo "== link-generator demo flow =="
+SC=$(curl -s -XPOST "$API/session/create" -H 'content-type: application/json' -d '{"preset":"high"}')
+SID=$(echo "$SC" | python -c "import sys,json;print(json.load(sys.stdin)['session_id'])" 2>/dev/null)
+echo "$SC" | grep -q 'data:image/png;base64' && ok "session/create returns a QR data URI" || no "no QR: $SC"
+echo "$SC" | grep -q "/checkout/$SID" && ok "customer_url points at /checkout/{id}" || no "bad customer_url"
+echo "$SC" | grep -q "/merchant/$SID" && ok "merchant_url points at /merchant/{id}" || no "bad merchant_url"
+CFG=$(echo "$SC" | python -c "import sys,json;c=json.load(sys.stdin)['config'];print(json.dumps({k:c[k] for k in ['list_price','device_type','city_tier','payment_method_preference','return_rate','cross_merchant_trust_score','num_merchants_transacted','account_age_days','cod_completion_rate','payment_success_rate','income_tier','pin_code','ip']}))" 2>/dev/null)
+PS=$(curl -s -XPOST "$API/personalize" -H 'content-type: application/json' -d "$(python -c "import json,sys;d=json.loads(sys.argv[1]);d['session_id']=sys.argv[2];print(json.dumps(d))" "$CFG" "$SID")")
+echo "$PS" | grep -q '"final_price"' && ok "personalize with session_id works" || no "personalize failed: $PS"
+SG=$(curl -s "$API/session/$SID")
+echo "$SG" | grep -q '"status":"priced"' && ok "session moved to priced after personalize" || no "session not priced: $SG"
+echo "$SG" | grep -q '"price_shown"' && ok "session has price_shown + wtp_score" || no "session missing results"
+ALL=$(curl -s "$API/sessions/all")
+echo "$ALL" | grep -q "$SID" && ok "session appears in /sessions/all" || no "session missing from list"
+DC=$(curl -s -XPOST "$API/session/$SID/complete")
+echo "$DC" | grep -q '"status":"converted"' && ok "session/complete -> converted" || no "complete failed: $DC"
+SEG=$(curl -s "$API/segment/stats/1%7CiPhone%7CCredit_Card")
+echo "$SEG" | grep -q 'posterior' && ok "segment/stats returns Bayesian posterior" || no "segment stats failed: $SEG"
+DRV=$(curl -s -XPOST "$API/config/derive" -H 'content-type: application/json' -d '{"pin_code":"560001","device_type":"iPhone","payment_method_preference":"UPI","prepaid_orders":30,"return_rate":0.08,"vpn":true}')
+echo "$DRV" | python -c "import sys,json; sys.exit(0 if json.load(sys.stdin)['config']['city_tier']==1 else 1)" \
+  && ok "config/derive autodetects tier from pincode" || no "derive failed: $DRV"
+
 echo "== dashboard $DASH =="
 DH=$(curl -s -o /dev/null -w '%{http_code}' "$DASH")
-[ "$DH" = "200" ] && ok "dashboard HTTP 200" || no "dashboard HTTP $DH"
-curl -s "$DASH" | grep -qi "WTP Dynamic Pricing Engine" && ok "dashboard serves our app" || no "dashboard content mismatch"
+echo "$DH" | grep -qE '200|30[178]' && ok "dashboard root responds ($DH -> /dashboard)" || no "dashboard HTTP $DH"
+curl -s "$DASH/dashboard" | grep -qi "Generate Customer Link" && ok "dashboard shows link generator" || no "dashboard content mismatch"
+curl -s -o /dev/null -w '%{http_code}' "$DASH/checkout/$SID" | grep -q 200 && ok "/checkout/{id} route renders" || no "checkout route failed"
+curl -s -o /dev/null -w '%{http_code}' "$DASH/merchant/$SID" | grep -q 200 && ok "/merchant/{id} route renders" || no "merchant route failed"
 
 echo "== postgres row check (host port $PGPORT) =="
 CNT=$(docker compose exec -T postgres psql -U wtp -d wtp -tAc "select count(*) from pricing_decisions" 2>/dev/null | tr -d '[:space:]')

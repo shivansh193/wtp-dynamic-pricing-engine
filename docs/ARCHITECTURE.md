@@ -51,6 +51,30 @@ a hard latency ceiling: `POST /personalize` returns **503** if it exceeds
 values, final price, offer, latency, session id — is logged to PostgreSQL
 (async, best-effort; in-memory ring buffer if the DB is down).
 
+### Demo layer: link generator + sessions
+
+On top of the pricing core sits a thin session layer for the panel demo:
+
+- `POST /session/create` takes a **preset** (`random` / `high` / `mid` / `low`
+  / `custom`). `api/presets.py` turns the coarse knobs a merchant would actually
+  have (pincode → city tier, device, payment preference, prepaid-order count,
+  return rate, VPN flag) into the full behavioural feature vector — trust
+  score, payment-success rate, COD-completion rate, account age. It returns a
+  `session_id`, a **customer URL** (`/checkout/{id}`), a **merchant URL**
+  (`/merchant/{id}`), and a **QR PNG** (data URI, `qrcode`).
+- The customer's `POST /personalize` carries the `session_id`; the API links
+  the decision back to the session (`pending → priced → converted`) and
+  **broadcasts** the update over `WS /ws/sessions` so the seller dashboard's
+  live table moves without polling.
+- `GET /segment/stats/{key}` computes a **Normal-Normal Bayesian posterior**
+  over the segment's WTP multiplier from the logged decisions — posterior mean,
+  95% credible interval, a conversion-probability curve across price points,
+  and a segment-level revenue-vs-flat simulation. This is what the merchant
+  view renders alongside the per-decision SHAP waterfall.
+
+The session store shares the Postgres pool and degrades to an in-process dict
+just like the decision log, so the whole demo runs with zero infra.
+
 ---
 
 ## 2. Data-flow diagram
@@ -119,7 +143,8 @@ flowchart TD
 | **MaxMind GeoLite2 (`geoip2`)** | Industry-standard offline IP→ASN/geo; free tier; no per-request network call. |
 | **FireHOL blocklist-ipsets** | Community-maintained, frequently-updated VPN/DC/Tor/bogon ranges; loaded once into memory. |
 | **pytrends / RBI DBIE** | Ground the synthetic data in *real* Indian demand seasonality and payment-mix trends. |
-| **Next.js 14 + Tailwind + Recharts** | App-router SSR for a fast first paint, utility CSS for a polished demo quickly, Recharts for the live metric charts. |
+| **Next.js 14 + Tailwind + Recharts** | App-router routes for `/dashboard`, `/checkout/{id}`, `/merchant/{id}`; utility CSS for a polished demo quickly; Recharts for the metric charts, conversion curve, and SHAP waterfall. |
+| **FastAPI WebSocket + `qrcode`** | `/ws/sessions` pushes session updates to the seller dashboard (no polling); `qrcode` renders the customer link as a scannable PNG for the phone demo. |
 | **Prophet + `arch` (GARCH) + `hmmlearn`** (Track 04) | Settlement forecasting needs trend/seasonality (Prophet), volatility clustering (GARCH), and discrete regime detection (HMM) — three complementary views. |
 | **Docker Compose** | One command brings up PG + Redis + seeder + API + dashboard with correct boot ordering and health gates. |
 | **joblib** | Simple, compressed serialisation of the model **and** its SHAP explainer as one bundle. |

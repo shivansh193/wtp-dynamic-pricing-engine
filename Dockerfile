@@ -27,9 +27,12 @@ COPY ip-enrichment/ ./ip-enrichment/
 COPY scripts/ ./scripts/
 COPY pytest.ini .
 
-RUN mkdir -p /app/data/raw /app/data/processed /app/model/artifacts
+RUN mkdir -p /app/data/raw /app/data/processed /app/model/artifacts \
+    && chmod +x scripts/*.sh
 
 EXPOSE 8000
 
-# default: run the API. The seeder service overrides `command:`.
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Default entrypoint self-seeds (data + model) when artifacts are missing, then
+# starts the API - so a single-container deploy (Railway / Render / `docker run`)
+# just works. docker-compose overrides `command:` (its `seeder` handles this).
+CMD ["bash", "scripts/start.sh"]

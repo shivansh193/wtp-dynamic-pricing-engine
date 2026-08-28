@@ -40,12 +40,18 @@ class Settings:
     CORS_ORIGINS: list[str] = _env(
         "CORS_ORIGINS",
         "http://localhost:3000,http://127.0.0.1:3000,"
-        "http://localhost:3001,http://127.0.0.1:3001",
+        "http://localhost:3001,http://127.0.0.1:3001,"
+        "http://localhost:3300,http://127.0.0.1:3300",
     ).split(",")
+    # "*" allows any origin (handy for a Vercel preview URL you don't know yet)
+    CORS_ALLOW_ALL: bool = _env("CORS_ALLOW_ALL", "false").lower() == "true"
+
+    # ---- public URLs (link generator builds customer/merchant links) ----
+    PUBLIC_BASE_URL: str = _env("PUBLIC_BASE_URL", "https://razorpay-wtp.vercel.app").rstrip("/")
 
     # ---- misc ----
     SERVICE_NAME: str = "wtp-pricing-engine"
-    VERSION: str = "1.0.0"
+    VERSION: str = "1.1.0"
 
 
 settings = Settings()

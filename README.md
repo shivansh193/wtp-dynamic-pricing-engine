@@ -28,8 +28,8 @@ customer signals ─▶ IP enrichment ─▶ WTP estimator (LightGBM + SHAP)
 | `data-pipeline/` | Fetch real data (RBI DBIE, Google Trends, FireHOL, MaxMind, IPinfo) + generate 50 k calibrated synthetic transactions. Every fetch has an offline fallback. |
 | `model/` | LightGBM **WTP regressor** (R² ≈ 0.91) + **conversion classifier** (AUC ≈ 0.72), SHAP explainer serialised with the model, 4 docs plots. |
 | `ip-enrichment/` | VPN / datacenter / Tor / public-wifi detection. In-memory FireHOL matcher, MaxMind + synthetic-ASN fallback, Indian shared-IP whitelist, Redis cache. `/enrich` router. |
-| `api/` | FastAPI: `POST /personalize`, `GET /metrics`, `GET /decision/{sid}`, `POST /simulate`, `GET /health`. CORS, request logging, 200 ms latency ceiling (503 over budget). |
-| `dashboard/` | Next.js 14 + Tailwind + Recharts. Split-screen checkout demo, live profile editor, IP-enrichment visualiser, auto-refreshing metrics. |
+| `api/` | FastAPI: `POST /personalize`, `GET /metrics`, `GET /decision/{sid}`, `POST /simulate`, `POST /session/create`, `GET /sessions/all`, `GET /segment/stats/{key}`, `WS /ws/sessions`, `GET /health`. CORS, request logging, 200 ms latency ceiling (503 over budget). |
+| `dashboard/` | Next.js 14 + Tailwind + Recharts. **Seller dashboard** (`/dashboard`) with a link generator + live session table (WebSocket) + aggregate analytics + Bayesian segment CIs; **customer checkout** (`/checkout/{id}`); **merchant session view** (`/merchant/{id}`) with SHAP waterfall + conversion curve. |
 | `cash-flow-oracle/` | Track 04 scaffold — merchant settlement forecasting (GARCH + HMM + Prophet). Clean code, no frontend. |
 | `docs/` | [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) + generated plots. |
 
@@ -84,30 +84,100 @@ in-process cache. Everything still works.
 
 ---
 
-## Demo script
+## Demo flow (link-generator)
 
-1. Open the dashboard. Two shoppers see the **same** Nike Pegasus 41 (₹4,999):
-   - **Customer A** (iPhone, Mumbai/Tier 1, Credit Card, trust 92) → **₹5,749
-     (+15 %)**, free extended warranty, credit card surfaced, instant-refund
-     badge.
-   - **Customer B** (budget Android, Patna/Tier 3, COD, trust 31, on a VPN) →
-     **₹4,499 (−10 %)**, 5 % cashback, UPI/COD first.
-2. Drag the **trust score** slider on Customer B up past 60 → COD becomes
-   eligible; past 80 → instant refund unlocks.
-3. Toggle **VPN mode** on Customer A → `ip_trust_multiplier` drops to 0.6, it's
-   applied to the trust score, price and offer move.
-4. Watch the **metrics panel**: revenue with WTP pricing vs flat, conversion by
-   offer type, top SHAP features, VPN/datacenter traffic share.
-5. `POST /simulate` (or the API docs) shows the full **counterfactual sweep** —
-   what the price would be if device / tier / payment method changed.
+The dashboard (`/dashboard`) drives a link-based demo:
+
+1. Presenter picks a preset — **High Income** (Tier 1 · iPhone · Credit Card ·
+   40+ prepaid orders · <5% returns), **Mid**, **Low Income** (Tier 3 · budget
+   Android · COD · >25% returns), **Random**, or **Custom** (full form:
+   pincode → auto tier, device, payment, prepaid-orders slider, return-rate
+   slider, VPN toggle) — and clicks **Generate Link**.
+2. A **customer link**, a **merchant link**, and a **QR code** appear. Every
+   generated session lands in the **live sessions table** (WebSocket, no
+   polling).
+3. A panel member scans the QR → `/checkout/{session_id}` opens **pre-filled**
+   with the preset (all fields editable). They adjust anything, hit
+   **See my price**.
+4. 1-second personalisation animation, then the reveal: personalised price,
+   "You saved ₹X" / "Premium experience pricing" badge, offer, payment methods
+   in personalised order, COD / instant-refund badges, an expandable
+   **"Why this price?"** (top-2 SHAP features in plain English), and a dummy
+   **Complete Purchase**.
+5. The seller dashboard table updates that row to **priced** in real time
+   (then **converted** on purchase).
+6. Click any row → `/merchant/{session_id}`: anonymised segment summary, WTP
+   score + confidence, **SHAP waterfall**, **conversion-probability curve**
+   across price points, and the **Bayesian segment posterior** (N seen,
+   posterior WTP mean + 95% CI, revenue vs flat pricing).
+7. Generate a **Low Income** link in a second tab → same product, ~−10%, free
+   delivery / cashback, COD eligible. Toggle **VPN** in the custom form to show
+   the trust multiplier drop the price and drop COD eligibility.
+
+Expected prices are ranges, not fixed numbers — a maxed-out High profile hits
+the **+15% cap**, a maxed-out Low profile hits the **−10% floor**; adjust the
+sliders on the checkout page to see the in-between.
+
+---
+
+## Deployment
+
+Frontend → **Vercel**, backend → **Railway** or **Render**. Same demo domain
+for the frontend (`razorpay-wtp.vercel.app`), backend on its own host.
+
+### Backend (Railway)
+
+```bash
+# from the repo root
+railway init
+railway add --plugin postgresql
+railway add --plugin redis
+railway up            # builds ./Dockerfile, runs scripts/start.sh
+```
+
+`scripts/start.sh` self-seeds on first boot (offline data + fast train, ~90 s)
+when no model artifacts are baked in, then starts uvicorn on `$PORT`.
+`DATABASE_URL` / `REDIS_URL` are injected by the plugins. Set:
+
+| var | value |
+|---|---|
+| `PUBLIC_BASE_URL` | your Vercel URL, e.g. `https://razorpay-wtp.vercel.app` |
+| `CORS_ALLOW_ALL` | `true` (or leave unset — `*.vercel.app` is already allowed) |
+| `SYNTHETIC_ROWS` | `20000` (keep first-boot training fast) |
+
+`railway.json` pins the Dockerfile build + `/health` check. **Render**: point a
+Blueprint at `render.yaml` (API web service + managed Postgres + Redis).
+
+### Frontend (Vercel)
+
+```bash
+cd dashboard
+vercel                        # first deploy (links the project)
+vercel env add NEXT_PUBLIC_API_URL   # -> https://api.razorpay-wtp.up.railway.app
+vercel --prod
+```
+
+`NEXT_PUBLIC_API_URL` is the only required env var — the browser calls the API
+directly (REST + `wss://` for the live session feed), so it must be publicly
+reachable and CORS-open to the Vercel origin. `dashboard/vercel.json` sets the
+framework + `bom1` (Mumbai) region.
+
+### One-box (any Docker host)
+
+```bash
+docker build -t wtp-api .
+docker run -p 8000:8000 -e PUBLIC_BASE_URL=http://localhost:3000 wtp-api
+# self-seeds, then serves. Add DATABASE_URL / REDIS_URL to use real datastores.
+```
 
 ---
 
 ## Test
 
 ```bash
-pytest                       # 20 tests: pricing engine, IP enrichment, API e2e
+pytest                       # 31 tests: pricing engine, IP enrichment, API e2e, session flow
 python scripts/smoke_api.py  # end-to-end, writes scripts/smoke_output.json
+bash scripts/verify_stack.sh 8000 3000 5432   # against a running compose stack (26 checks)
 ```
 
 ---

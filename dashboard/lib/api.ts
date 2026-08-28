@@ -1,7 +1,32 @@
-import type { CustomerSignals, MetricsResponse, PricingResponse } from "./types";
+import type {
+  CustomSessionFields,
+  CustomerSignals,
+  MetricsResponse,
+  Preset,
+  PricingResponse,
+  SegmentStats,
+  SessionCreateResponse,
+  SessionInfo,
+} from "./types";
 
-const BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/$/, "") || "http://localhost:8000";
+const BASE = (
+  process.env.NEXT_PUBLIC_API_URL ||
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  "http://localhost:8000"
+).replace(/\/$/, "");
+
+export const API_BASE = BASE;
+
+/** ws:// or wss:// origin for the live session feed. */
+export function wsBase(): string {
+  try {
+    const u = new URL(BASE);
+    u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
+    return u.toString().replace(/\/$/, "");
+  } catch {
+    return BASE.replace(/^http/, "ws");
+  }
+}
 
 async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
@@ -22,14 +47,15 @@ async function jsonFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-export function personalize(signals: CustomerSignals) {
+// ---- pricing ----
+export function personalize(signals: Partial<CustomerSignals> & { list_price: number }) {
   return jsonFetch<PricingResponse>("/personalize", {
     method: "POST",
     body: JSON.stringify(signals),
   });
 }
 
-export function simulate(profile: CustomerSignals) {
+export function simulate(profile: Partial<CustomerSignals> & { list_price: number }) {
   return jsonFetch<{ base: PricingResponse; sensitivity: any[] }>("/simulate", {
     method: "POST",
     body: JSON.stringify({ profile }),
@@ -44,4 +70,50 @@ export function getHealth() {
   return jsonFetch<Record<string, any>>("/health");
 }
 
-export const API_BASE = BASE;
+// ---- link-generator demo flow ----
+export function createSession(preset: Preset, custom?: CustomSessionFields, seed?: number) {
+  return jsonFetch<SessionCreateResponse>("/session/create", {
+    method: "POST",
+    body: JSON.stringify({ preset, custom, seed }),
+  });
+}
+
+export function getSession(sessionId: string) {
+  return jsonFetch<SessionInfo>(`/session/${sessionId}`);
+}
+
+export function deriveConfig(knobs: {
+  pin_code?: string;
+  device_type?: string;
+  payment_method_preference?: string;
+  prepaid_orders?: number;
+  return_rate?: number;
+  vpn?: boolean;
+}) {
+  return jsonFetch<{ config: SessionInfo["config"]; segment_key: string }>(
+    "/config/derive",
+    { method: "POST", body: JSON.stringify(knobs) },
+  );
+}
+
+export function getDecision(sessionId: string) {
+  return jsonFetch<{
+    session_id: string;
+    decision_count: number;
+    decisions: any[];
+  }>(`/decision/${sessionId}`);
+}
+
+export function getAllSessions() {
+  return jsonFetch<{ count: number; backend: string; sessions: SessionInfo[] }>(
+    "/sessions/all",
+  );
+}
+
+export function completeSession(sessionId: string) {
+  return jsonFetch<SessionInfo>(`/session/${sessionId}/complete`, { method: "POST" });
+}
+
+export function getSegmentStats(segmentKey: string) {
+  return jsonFetch<SegmentStats>(`/segment/stats/${encodeURIComponent(segmentKey)}`);
+}

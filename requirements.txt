@@ -24,6 +24,9 @@ uvicorn[standard]==0.30.1
 pydantic==2.7.4
 pydantic-settings==2.3.4
 python-multipart==0.0.9
+websockets==12.0
+qrcode==7.4.2
+pillow==10.3.0
 
 # ---- Datastores ----
 asyncpg==0.29.0

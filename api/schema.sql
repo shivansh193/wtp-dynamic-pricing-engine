@@ -58,3 +58,30 @@ SELECT
         d.input_signals ->> 'payment_method_preference'
     ) AS segment_key
 FROM pricing_decisions d;
+
+-- ==========================================================================
+-- Demo sessions (link-generator flow): one row per generated customer link.
+--   pending  -> link created, customer hasn't priced yet
+--   priced   -> customer hit "See my price" (POST /personalize)
+--   converted-> customer clicked "Complete Purchase" (dummy)
+--   abandoned-> explicitly abandoned / timed out
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id     TEXT PRIMARY KEY,
+    merchant_id    TEXT        NOT NULL,
+    preset         TEXT        NOT NULL,          -- random | high | mid | low | custom
+    config         JSONB       NOT NULL,          -- pre-populated customer signals
+    status         TEXT        NOT NULL DEFAULT 'pending',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    priced_at      TIMESTAMPTZ,
+    completed_at   TIMESTAMPTZ,
+    list_price     NUMERIC(12,2),
+    price_shown    NUMERIC(12,2),
+    wtp_score      NUMERIC(8,5),
+    offer_type     TEXT,
+    segment_key    TEXT,
+    result         JSONB                          -- full PricingResponse snapshot
+);
+CREATE INDEX IF NOT EXISTS ix_sessions_created ON sessions (created_at DESC);
+CREATE INDEX IF NOT EXISTS ix_sessions_status  ON sessions (status);
+CREATE INDEX IF NOT EXISTS ix_sessions_segment ON sessions (segment_key);

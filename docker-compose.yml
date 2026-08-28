@@ -74,6 +74,8 @@ services:
       LATENCY_BUDGET_MS: ${LATENCY_BUDGET_MS:-200}
       MODEL_DIR: /app/model/artifacts
       CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://localhost:${DASHBOARD_HOST_PORT:-3000},http://127.0.0.1:${DASHBOARD_HOST_PORT:-3000}
+      # links the generator hands out (customer_url / merchant_url + QR)
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3300}
       DB_REQUIRED: "false"
       # keep per-request LightGBM predict + SHAP from oversubscribing threads
       OMP_NUM_THREADS: ${API_THREADS:-2}
@@ -104,9 +106,10 @@ services:
       context: ./dashboard
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_BASE_URL: http://localhost:${API_HOST_PORT:-8000}
+        # baked into the client bundle at build time
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:${API_HOST_PORT:-8000}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     ports:
       - "${DASHBOARD_HOST_PORT:-3000}:3000"
     depends_on:

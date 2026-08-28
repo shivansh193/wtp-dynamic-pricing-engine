@@ -3,12 +3,18 @@ Step 6 - FastAPI backend for the WTP Dynamic Pricing Engine.
 
 Endpoints
 ---------
-POST /personalize        full pricing decision for one checkout
-GET  /metrics            aggregate analytics + revenue-lift simulation
-GET  /decision/{sid}     full decision log (incl. SHAP) for a session
-POST /simulate           decision + counterfactual sensitivity sweep
-GET  /health             liveness + component status
-GET  /                   service banner
+POST /personalize            full pricing decision for one checkout
+GET  /metrics                aggregate analytics + revenue-lift simulation
+GET  /decision/{sid}         full decision log (incl. SHAP) for a session
+POST /simulate               decision + counterfactual sensitivity sweep
+POST /session/create         generate a demo customer link (+ QR)
+GET  /session/{sid}          session config + results if priced
+GET  /sessions/all           every generated session (seller dashboard table)
+POST /session/{sid}/complete mark the dummy "purchase" as converted
+GET  /segment/stats/{key}    Bayesian posterior WTP for a segment
+WS   /ws/sessions            live session updates for the seller dashboard
+GET  /health                 liveness + component status
+GET  /                       service banner
 
 Cross-cutting
 -------------
@@ -25,18 +31,32 @@ from __future__ import annotations
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from . import _bootstrap  # noqa: F401
+from . import presets as _presets
 from .config import settings
 from .context import market_context
 from .db import db
 from .logging_util import log
 from .metrics import compute_metrics
-from .schemas import CustomerSignals, PricingResponse, SimulateRequest, SimulateResponse
+from .qr import make_qr_data_uri
+from .schemas import (
+    CustomerSignals,
+    PricingResponse,
+    SessionCreateRequest,
+    SessionCreateResponse,
+    SessionInfo,
+    SessionListResponse,
+    SimulateRequest,
+    SimulateResponse,
+)
+from .segment_stats import posterior as segment_posterior
 from .service import personalize, simulate
+from .sessions import session_store
+from .ws import manager as ws_manager
 
 from ip_enrichment.router import router as enrich_router  # type: ignore
 from ip_enrichment.service import get_service as get_ip_service  # type: ignore
@@ -74,8 +94,9 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
+    allow_origins=["*"] if settings.CORS_ALLOW_ALL else settings.CORS_ORIGINS,
+    allow_origin_regex=r"https://.*\.vercel\.app" if not settings.CORS_ALLOW_ALL else None,
+    allow_credentials=not settings.CORS_ALLOW_ALL,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["X-Process-Time-Ms"],
@@ -127,7 +148,10 @@ async def root() -> dict:
         "version": settings.VERSION,
         "track": "Razorpay AI Buildathon 2026 - Track 01",
         "endpoints": ["/personalize", "/metrics", "/decision/{session_id}",
-                      "/simulate", "/enrich", "/health", "/docs"],
+                      "/simulate", "/session/create", "/session/{id}",
+                      "/sessions/all", "/segment/stats/{key}", "/ws/sessions",
+                      "/enrich", "/health", "/docs"],
+        "public_base_url": settings.PUBLIC_BASE_URL,
     }
 
 
@@ -147,9 +171,12 @@ async def health() -> dict:
             "ip_enrichment_ready": ip_svc.ready,
             "ip_geo_mode": "mock" if ip_svc.mock_geo_mode else "maxmind",
             "db_backend": db.backend,
+            "session_backend": session_store.backend,
             "cache_backend": ip_svc.cache_backend if ip_svc.ready else "n/a",
             "festival_context": market_context.loaded,
+            "ws_clients": ws_manager.count,
         },
+        "public_base_url": settings.PUBLIC_BASE_URL,
         "latency_budget_ms": settings.LATENCY_BUDGET_MS,
     }
 
@@ -171,6 +198,22 @@ async def personalize_endpoint(payload: CustomerSignals) -> PricingResponse:
         await db.log_decision(db_record)
     except Exception as exc:  # noqa: BLE001
         log(f"decision logging failed: {exc!r}", level="WARN")
+
+    # if this call belongs to a generated demo session, mark it priced and
+    # push the update to the seller dashboard over the websocket
+    if payload.session_id:
+        try:
+            updated = await session_store.mark_priced(
+                payload.session_id,
+                wtp_score=response.wtp_multiplier,
+                price_shown=response.final_price,
+                offer_type=response.offer_type,
+                result=response.model_dump(),
+            )
+            if updated:
+                await ws_manager.broadcast("session.priced", updated)
+        except Exception as exc:  # noqa: BLE001
+            log(f"session update failed for {payload.session_id}: {exc!r}", level="WARN")
 
     return response
 
@@ -237,6 +280,169 @@ async def simulate_endpoint(req: SimulateRequest) -> SimulateResponse:
     base.budget_ms = settings.LATENCY_BUDGET_MS
     base.budget_exceeded = base.latency_ms > settings.LATENCY_BUDGET_MS
     return SimulateResponse(base=base, sensitivity=sensitivity)
+
+
+# --------------------------------------------------------------------------- #
+# Link-generator demo flow
+# --------------------------------------------------------------------------- #
+def _session_urls(session_id: str) -> tuple[str, str]:
+    base = settings.PUBLIC_BASE_URL
+    return f"{base}/checkout/{session_id}", f"{base}/merchant/{session_id}"
+
+
+@app.post("/session/create", response_model=SessionCreateResponse)
+async def session_create(req: SessionCreateRequest) -> SessionCreateResponse:
+    custom = req.custom.model_dump(exclude_none=True) if req.custom else None
+    config = _presets.build_config(req.preset, custom, seed=req.seed)
+    segment_key = _presets.segment_key_for(config)
+
+    row = await session_store.create(preset=req.preset, config=config, segment_key=segment_key)
+    customer_url, merchant_url = _session_urls(row["session_id"])
+    qr = make_qr_data_uri(customer_url)
+
+    await ws_manager.broadcast("session.created", _row_public(row))
+
+    return SessionCreateResponse(
+        session_id=row["session_id"],
+        merchant_id=row["merchant_id"],
+        preset=req.preset,
+        config=config,
+        segment_key=segment_key,
+        customer_url=customer_url,
+        merchant_url=merchant_url,
+        qr_code_base64=qr,
+        status=row["status"],
+        created_at=str(row["created_at"]),
+    )
+
+
+@app.post("/config/derive")
+async def config_derive(body: dict) -> dict:
+    """Re-derive a full customer config from the raw checkout-form knobs
+    (pincode, device, payment, prepaid_orders, return_rate, vpn) WITHOUT
+    creating a session. The checkout form calls this as the shopper edits."""
+    cfg = _presets.build_config(
+        "custom",
+        {
+            "pin_code": body.get("pin_code"),
+            "device_type": body.get("device_type"),
+            "payment_method_preference": body.get("payment_method_preference"),
+            "prepaid_orders": body.get("prepaid_orders"),
+            "return_rate": body.get("return_rate"),
+            "vpn": body.get("vpn"),
+            "city_tier": body.get("city_tier"),
+        },
+    )
+    return {"config": cfg, "segment_key": _presets.segment_key_for(cfg)}
+
+
+@app.get("/session/{session_id}", response_model=SessionInfo)
+async def session_get(session_id: str) -> SessionInfo:
+    row = await session_store.get(session_id)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"session {session_id!r} not found")
+    return SessionInfo(**_row_public(row))
+
+
+@app.get("/sessions/all", response_model=SessionListResponse)
+async def sessions_all(limit: int = 500) -> SessionListResponse:
+    rows = await session_store.all(limit=limit)
+    return SessionListResponse(
+        count=len(rows),
+        backend=session_store.backend,
+        sessions=[SessionInfo(**_row_public(r)) for r in rows],
+    )
+
+
+@app.post("/session/{session_id}/complete", response_model=SessionInfo)
+async def session_complete(session_id: str) -> SessionInfo:
+    row = await session_store.set_status(session_id, "converted")
+    if not row:
+        raise HTTPException(status_code=404, detail=f"session {session_id!r} not found")
+    pub = _row_public(row)
+    await ws_manager.broadcast("session.completed", pub)
+    return SessionInfo(**pub)
+
+
+@app.post("/session/{session_id}/abandon", response_model=SessionInfo)
+async def session_abandon(session_id: str) -> SessionInfo:
+    row = await session_store.set_status(session_id, "abandoned")
+    if not row:
+        raise HTTPException(status_code=404, detail=f"session {session_id!r} not found")
+    pub = _row_public(row)
+    await ws_manager.broadcast("session.abandoned", pub)
+    return SessionInfo(**pub)
+
+
+@app.get("/segment/stats/{segment_key:path}")
+async def segment_stats(segment_key: str) -> dict:
+    rows = await db.fetch_all()
+    stats = segment_posterior(segment_key, rows)
+    # add a flat-vs-WTP revenue comparison for this segment from the log
+    seg_rows = [r for r in rows if _seg_key(r) == segment_key]
+    rev = _segment_revenue(seg_rows)
+    stats["revenue_simulation"] = rev
+    stats["n_customers_like_this"] = len(seg_rows)
+    return stats
+
+
+@app.websocket("/ws/sessions")
+async def ws_sessions(ws: WebSocket) -> None:
+    await ws_manager.connect(ws)
+    try:
+        await ws.send_json({"type": "hello", "session": None,
+                            "backend": session_store.backend})
+        while True:
+            # we don't expect client messages; this keeps the socket open
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        await ws_manager.disconnect(ws)
+    except Exception:  # noqa: BLE001
+        await ws_manager.disconnect(ws)
+
+
+# ---- helpers ---- #
+def _row_public(row: dict) -> dict:
+    """Session row -> JSON-safe dict matching SessionInfo."""
+    keys = ("session_id", "merchant_id", "preset", "config", "status", "created_at",
+            "priced_at", "completed_at", "list_price", "price_shown", "wtp_score",
+            "offer_type", "segment_key", "result")
+    out = {}
+    for k in keys:
+        v = row.get(k)
+        if hasattr(v, "isoformat"):
+            v = v.isoformat()
+        out[k] = v
+    return out
+
+
+def _seg_key(decision_row: dict) -> str:
+    import json as _json
+
+    v = decision_row.get("input_signals")
+    sig = _json.loads(v) if isinstance(v, str) else (v or {})
+    return "|".join(str(sig.get(k, "?")) for k in
+                    ("city_tier", "device_type", "payment_method_preference"))
+
+
+def _segment_revenue(seg_rows: list[dict]) -> dict:
+    import json as _json
+
+    rev_wtp = rev_flat = 0.0
+    for r in seg_rows:
+        sv = r.get("shap_values")
+        sv = _json.loads(sv) if isinstance(sv, str) else (sv or {})
+        c_adj = float(sv.get("conversion_at_adjusted") or 0.0)
+        c_list = float(sv.get("conversion_at_list") or c_adj)
+        rev_wtp += float(r.get("final_price") or 0.0) * c_adj
+        rev_flat += float(r.get("list_price") or 0.0) * c_list
+    lift = rev_wtp - rev_flat
+    return {
+        "expected_revenue_wtp_pricing": round(rev_wtp, 2),
+        "expected_revenue_flat_pricing": round(rev_flat, 2),
+        "absolute_lift": round(lift, 2),
+        "pct_lift": round((lift / rev_flat * 100.0) if rev_flat else 0.0, 3),
+    }
 
 
 if __name__ == "__main__":

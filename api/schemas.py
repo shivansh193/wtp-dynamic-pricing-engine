@@ -124,3 +124,61 @@ class Counterfactual(BaseModel):
 class SimulateResponse(BaseModel):
     base: PricingResponse
     sensitivity: list[Counterfactual]
+
+
+# ==========================================================================
+# Link-generator demo flow
+# ==========================================================================
+Preset = Literal["random", "high", "mid", "low", "custom"]
+
+
+class CustomSessionFields(BaseModel):
+    pin_code: Optional[str] = None
+    device_type: Optional[DeviceType] = None
+    payment_method_preference: Optional[PaymentPref] = None
+    prepaid_orders: Optional[int] = Field(None, ge=0, le=50)
+    return_rate: Optional[float] = Field(None, ge=0, le=0.5)
+    vpn: Optional[bool] = None
+    city_tier: Optional[Literal[1, 2, 3]] = None
+
+
+class SessionCreateRequest(BaseModel):
+    preset: Preset = "random"
+    custom: Optional[CustomSessionFields] = None
+    seed: Optional[int] = None
+
+
+class SessionCreateResponse(BaseModel):
+    session_id: str
+    merchant_id: str
+    preset: str
+    config: dict[str, Any]
+    segment_key: str
+    customer_url: str
+    merchant_url: str
+    qr_code_base64: str
+    status: str
+    created_at: str
+
+
+class SessionInfo(BaseModel):
+    session_id: str
+    merchant_id: str
+    preset: str
+    config: dict[str, Any]
+    status: str
+    created_at: Optional[str] = None
+    priced_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    list_price: Optional[float] = None
+    price_shown: Optional[float] = None
+    wtp_score: Optional[float] = None
+    offer_type: Optional[str] = None
+    segment_key: Optional[str] = None
+    result: Optional[dict[str, Any]] = None
+
+
+class SessionListResponse(BaseModel):
+    count: int
+    backend: str
+    sessions: list[SessionInfo]
