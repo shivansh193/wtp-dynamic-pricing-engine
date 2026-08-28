@@ -8,6 +8,15 @@ signals, then dynamically adjusts the **price and offer** shown at checkout — 
 **under 200 ms** — behind a clean API that sits between a merchant's checkout
 and Razorpay payment initiation.
 
+> **Live demo**
+> - Seller dashboard: **https://wtp-dynamic-pricing-engine.vercel.app/dashboard**
+> - API: **https://wtp-pricing-api.onrender.com** (`/docs`, `/health`)
+>
+> The API runs on a free Render instance — it sleeps after ~15 min idle and the
+> first request then takes ~50 s to wake. Hit `/health` once to warm it before a
+> live walkthrough. The checkout auto-retries once and shows a "waking up"
+> message if it's cold.
+
 ```
 customer signals ─▶ IP enrichment ─▶ WTP estimator (LightGBM + SHAP)
                                           │
@@ -108,8 +117,11 @@ The dashboard (`/dashboard`) drives a link-based demo:
    (then **converted** on purchase).
 6. Click any row → `/merchant/{session_id}`: anonymised segment summary, WTP
    score + confidence, **SHAP waterfall**, **conversion-probability curve**
-   across price points, and the **Bayesian segment posterior** (N seen,
-   posterior WTP mean + 95% CI, revenue vs flat pricing).
+   across price points, the **Bayesian segment posterior** (N seen, posterior
+   WTP mean + Student-t 95% CI clipped to the price band), and **expected
+   gross-margin lift vs flat pricing** (a markup is a margin play — COGS is
+   unchanged — so a premium segment shows a clear margin gain even when
+   expected *revenue* is roughly flat at the model's conversion elasticity).
 7. Generate a **Low Income** link in a second tab → same product, ~−10%, free
    delivery / cashback, COD eligible. Toggle **VPN** in the custom form to show
    the trust multiplier drop the price and drop COD eligibility.
@@ -122,52 +134,68 @@ sliders on the checkout page to see the in-between.
 
 ## Deployment
 
-Frontend → **Vercel**, backend → **Railway** or **Render**. Same demo domain
-for the frontend (`razorpay-wtp.vercel.app`), backend on its own host.
+**Frontend → Vercel, backend → Render** (both entirely from the CLI). The API
+cannot run on Vercel — `/ws/sessions` needs a long-lived process and the
+LightGBM + SHAP + SciPy bundle far exceeds the serverless size limit.
 
-### Backend (Railway)
+The API image **bakes the dataset + trained models at build time**
+(`ARG BAKE_MODEL=1` in the `Dockerfile` → `scripts/seed_offline.sh`), so the
+container cold-starts in ~4 s instead of self-seeding for ~2 min on every
+scale-from-zero. `docker-compose` passes `BAKE_MODEL=0` (its `seeder` service
+handles that).
+
+### Backend — Render (free web service, no card)
 
 ```bash
-# from the repo root
-railway init
-railway add --plugin postgresql
-railway add --plugin redis
-railway up            # builds ./Dockerfile, runs scripts/start.sh
+export RENDER_API_KEY=rnd_...     # dashboard.render.com → Account → API Keys
+
+render services create \
+  --name wtp-pricing-api --type web_service --runtime docker \
+  --repo https://github.com/<you>/wtp-dynamic-pricing-engine --branch master \
+  --region singapore --plan free --health-check-path /health \
+  --env-var LATENCY_BUDGET_MS=1200 --env-var SYNTHETIC_ROWS=20000 \
+  --env-var TRAIN_FAST=1 --env-var OMP_NUM_THREADS=2 --env-var DB_REQUIRED=false \
+  --env-var CORS_ALLOW_ALL=true \
+  --env-var PUBLIC_BASE_URL=https://<your-app>.vercel.app \
+  --confirm
 ```
 
-`scripts/start.sh` self-seeds on first boot (offline data + fast train, ~90 s)
-when no model artifacts are baked in, then starts uvicorn on `$PORT`.
-`DATABASE_URL` / `REDIS_URL` are injected by the plugins. Set:
+Notes:
+- **`LATENCY_BUDGET_MS=1200`** — a free shared-CPU instance does the full
+  IP-enrich + WTP + SHAP + 2× conversion + engine pass in ~270–300 ms (vs
+  <200 ms on real infra), and `POST /personalize` hard-returns **503** over
+  budget. Every response still reports the true `latency_ms` + `budget_exceeded`.
+- No `DATABASE_URL` / `REDIS_URL` → in-memory decision log + session store +
+  cache. Add Render Postgres + Key Value and set the URLs for persistence.
+- `CORS_ALLOW_ALL=true`, or leave it off — `*.vercel.app` is allowed by an
+  origin regex already.
+- Health check path **must** be passed carefully on Windows Git Bash —
+  `--health-check-path /health` gets rewritten to a Windows path unless you
+  prefix `MSYS_NO_PATHCONV=1`.
+- `render.yaml` is the Blueprint equivalent (Render dashboard → New → Blueprint).
 
-| var | value |
-|---|---|
-| `PUBLIC_BASE_URL` | your Vercel URL, e.g. `https://razorpay-wtp.vercel.app` |
-| `CORS_ALLOW_ALL` | `true` (or leave unset — `*.vercel.app` is already allowed) |
-| `SYNTHETIC_ROWS` | `20000` (keep first-boot training fast) |
-
-`railway.json` pins the Dockerfile build + `/health` check. **Render**: point a
-Blueprint at `render.yaml` (API web service + managed Postgres + Redis).
-
-### Frontend (Vercel)
+### Frontend — Vercel
 
 ```bash
 cd dashboard
-vercel                        # first deploy (links the project)
-vercel env add NEXT_PUBLIC_API_URL   # -> https://api.razorpay-wtp.up.railway.app
-vercel --prod
+vercel link --yes --project wtp-dynamic-pricing-engine
+printf 'https://wtp-pricing-api.onrender.com' | vercel env add NEXT_PUBLIC_API_URL production
+vercel deploy --prod --yes
 ```
 
-`NEXT_PUBLIC_API_URL` is the only required env var — the browser calls the API
-directly (REST + `wss://` for the live session feed), so it must be publicly
-reachable and CORS-open to the Vercel origin. `dashboard/vercel.json` sets the
-framework + `bom1` (Mumbai) region.
+`NEXT_PUBLIC_API_URL` is the only required var — it's inlined into the client
+bundle at build time; the browser calls the API directly (REST + `wss://` for
+the live session feed), so redeploy after changing it. `next.config.js` also
+accepts the legacy `NEXT_PUBLIC_API_BASE_URL`. Production alias:
+`https://wtp-dynamic-pricing-engine.vercel.app` (the raw `*-<hash>-*.vercel.app`
+deployment URLs sit behind Vercel SSO on Hobby; the alias is public).
 
 ### One-box (any Docker host)
 
 ```bash
-docker build -t wtp-api .
+docker build -t wtp-api .          # bakes model; ~3 min
 docker run -p 8000:8000 -e PUBLIC_BASE_URL=http://localhost:3000 wtp-api
-# self-seeds, then serves. Add DATABASE_URL / REDIS_URL to use real datastores.
+# cold-starts in ~4 s. Add DATABASE_URL / REDIS_URL to use real datastores.
 ```
 
 ---
