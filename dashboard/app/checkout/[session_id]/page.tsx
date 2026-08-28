@@ -42,18 +42,29 @@ export default function CheckoutPage({
   const submit = async (derived: SessionConfig) => {
     setPhase("personalising");
     const started = Date.now();
-    try {
-      const r = await personalize(signalsFromConfig(derived, sessionId));
-      // hold the "personalising" screen for at least ~1s for the reveal effect
-      const wait = Math.max(0, 1000 - (Date.now() - started));
-      setTimeout(() => {
-        setResult(r);
-        setPhase("reveal");
-      }, wait);
-    } catch (e: any) {
-      setErr(e.message);
-      setPhase("error");
+    const payload = signalsFromConfig(derived, sessionId);
+    // one retry - the backend may be a free-tier instance waking from sleep
+    let lastErr: any = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const r = await personalize(payload);
+        const wait = Math.max(0, 1000 - (Date.now() - started));
+        setTimeout(() => {
+          setResult(r);
+          setPhase("reveal");
+        }, wait);
+        return;
+      } catch (e: any) {
+        lastErr = e;
+        if (attempt === 0) await new Promise((res) => setTimeout(res, 1500));
+      }
     }
+    setErr(
+      /failed to fetch|networkerror|503/i.test(String(lastErr?.message))
+        ? "The pricing service is waking up — give it a few seconds and tap “See my price” again."
+        : lastErr?.message || "Something went wrong.",
+    );
+    setPhase("error");
   };
 
   return (
@@ -77,8 +88,19 @@ export default function CheckoutPage({
         )}
 
         {phase === "error" && (
-          <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-center text-sm text-red-700">
-            {err ?? "Something went wrong."}
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-6 text-center text-sm text-amber-800">
+            <p>{err ?? "Something went wrong."}</p>
+            {session && (
+              <button
+                onClick={() => {
+                  setErr(null);
+                  setPhase("form");
+                }}
+                className="mt-3 rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-white"
+              >
+                Back to form
+              </button>
+            )}
           </div>
         )}
 
