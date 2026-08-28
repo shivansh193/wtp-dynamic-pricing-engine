@@ -55,6 +55,17 @@ First boot takes a few minutes (pip install + 50 k-row generation + training).
 Later boots are fast — the seeder sees its marker file and exits immediately.
 Delete the `appdata` / `appmodels` volumes to force a re-seed.
 
+**Verified:** `bash scripts/verify_stack.sh` exercises the running stack end to
+end (health, both personalise profiles, `/decision`, `/metrics`, `/simulate`,
+`/enrich`, the dashboard, and a direct Postgres row count) — 14/14.
+
+**Host-port clashes / thread tuning** — every host port and the seeder thread
+cap are env-overridable (defaults in parentheses):
+`POSTGRES_HOST_PORT` (5432), `REDIS_HOST_PORT` (6379), `API_HOST_PORT` (8000),
+`DASHBOARD_HOST_PORT` (3000), `SEEDER_THREADS` (4), `TRAIN_FAST` (1),
+`API_THREADS` (2). Put them in `.env`. (LightGBM oversubscribes threads inside
+the Docker Desktop VM — the cap keeps training at ~5 s instead of ~20 min.)
+
 ### Local (no Docker)
 
 ```bash

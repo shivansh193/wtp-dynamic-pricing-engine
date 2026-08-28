@@ -238,6 +238,21 @@ codebase and the cap constants are the first thing a reviewer should check
 - **SHAP display values.** Early responses showed encoded integers
   (`device_type = 2.0`) in the reasoning. `inference.py` now keeps the
   pre-encoding frame alongside the encoded one and reports the human value.
-- **Docker Desktop was not running** in the build environment, so the images
-  are defined and `docker compose config` validates, but the containers
-  themselves were verified only by running the services natively.
+- **Docker Desktop hung on startup** (corrupted emulated-socket file in
+  `%LOCALAPPDATA%\Docker\run\`). Fix: kill the Docker processes, **rename** (not
+  delete — the NTFS reparse point resists delete) the `run` dir, relaunch. Then
+  the full `docker compose` stack was built and verified end to end
+  (`scripts/verify_stack.sh` → 14/14).
+- **LightGBM training took 20 min inside the Docker Desktop Linux VM** (vs ~12 s
+  native). OpenMP oversubscription: 16+ threads busy-spinning on tiny per-round
+  work at ~1700 % CPU. Fix: cap `OMP_NUM_THREADS` / LightGBM `num_threads`
+  (`_NUM_THREADS` in `model/train.py`, `OMP_NUM_THREADS=4` in the seeder
+  service) and `force_col_wise=True`. Training dropped to ~5 s.
+- **`GET /decision/{session_id}` 500'd against Postgres** —
+  `asyncpg` returns the `INET` column as an `ipaddress.IPv4Address`, which
+  Pydantic can't serialize. Fixed with a scalar-normaliser in the endpoint that
+  also decodes `jsonb`-as-text back to objects.
+- **Host ports 5432 and 3000 were already taken** by an unrelated stack. The
+  compose host-port mappings are now env-parameterised
+  (`POSTGRES_HOST_PORT`, `DASHBOARD_HOST_PORT`, `API_HOST_PORT`,
+  `REDIS_HOST_PORT`); container-internal ports are unchanged.

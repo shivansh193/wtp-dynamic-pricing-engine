@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +43,11 @@ from . import plots
 ARTIFACTS = Path(__file__).resolve().parent / "artifacts"
 ARTIFACTS.mkdir(parents=True, exist_ok=True)
 DOCS = Path(__file__).resolve().parents[1] / "docs"
+
+# LightGBM + OpenMP oversubscribe badly inside virtualised Linux (Docker Desktop
+# on Windows): 16+ threads busy-spin on tiny per-round work and a 15s job takes
+# 20 min. Cap it. 0 = let LightGBM decide (fine on bare metal).
+_NUM_THREADS = int(os.getenv("LGBM_NUM_THREADS", os.getenv("OMP_NUM_THREADS", "0")) or 0)
 
 
 # --------------------------------------------------------------------------- #
@@ -71,6 +77,8 @@ def train_wtp(fast: bool = False) -> dict:
         "lambda_l2": 1.0,
         "verbose": -1,
         "seed": 42,
+        "num_threads": _NUM_THREADS,
+        "force_col_wise": True,
     }
     rounds = 300 if fast else 2000
     model = lgb.train(
@@ -130,15 +138,18 @@ def train_wtp(fast: bool = False) -> dict:
     # ---- load+infer timing check (<50ms requirement) ----
     _timing_check(out, sp.X_test.iloc[[0]])
 
-    # ---- plots ----
-    plots.feature_importance(model, feat)
-    if not fast:
-        sample = sp.X_test.sample(min(2000, len(sp.X_test)), random_state=0)
-        sv = explainer.shap_values(sample)
-        plots.shap_summary(sv, sample)
-    seg_df = sp.raw_test.copy()
-    seg_df["pred_wtp"] = pred
-    plots.wtp_distribution_by_segment(seg_df)
+    # ---- plots (non-critical: a read-only /docs mount must not fail training) ----
+    try:
+        plots.feature_importance(model, feat)
+        if not fast:
+            sample = sp.X_test.sample(min(2000, len(sp.X_test)), random_state=0)
+            sv = explainer.shap_values(sample)
+            plots.shap_summary(sv, sample)
+        seg_df = sp.raw_test.copy()
+        seg_df["pred_wtp"] = pred
+        plots.wtp_distribution_by_segment(seg_df)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  WARN: docs plots skipped ({exc!r})")
 
     return bundle["metadata"]
 
@@ -164,6 +175,8 @@ def train_conversion(fast: bool = False) -> dict:
         "lambda_l2": 1.0,
         "verbose": -1,
         "seed": 42,
+        "num_threads": _NUM_THREADS,
+        "force_col_wise": True,
     }
     rounds = 300 if fast else 1500
     model = lgb.train(
@@ -194,8 +207,11 @@ def train_conversion(fast: bool = False) -> dict:
     joblib.dump(bundle, out, compress=3)
     print(f"  saved {out}  ({out.stat().st_size/1e6:.1f} MB)")
 
-    # conversion-lift curve uses the raw test frame
-    plots.conversion_lift_curve(sp.raw_test)
+    # conversion-lift curve uses the raw test frame (non-critical)
+    try:
+        plots.conversion_lift_curve(sp.raw_test)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  WARN: conversion-lift plot skipped ({exc!r})")
     return bundle["metadata"]
 
 

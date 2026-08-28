@@ -190,13 +190,36 @@ async def decision_endpoint(session_id: str) -> dict:
     if not rows:
         raise HTTPException(status_code=404, detail=f"no decisions for session {session_id!r}")
 
+    import decimal
+    import ipaddress
+    import json as _json
+
+    def _scalar(v):
+        if v is None or isinstance(v, (str, int, float, bool)):
+            return v
+        if isinstance(v, decimal.Decimal):
+            return float(v)
+        if isinstance(v, (ipaddress.IPv4Address, ipaddress.IPv6Address)):
+            return str(v)
+        if hasattr(v, "isoformat"):          # date / datetime
+            return v.isoformat()
+        if isinstance(v, (dict, list)):
+            return v
+        return str(v)
+
+    # asyncpg returns jsonb columns as text; decode them back to objects
+    _JSON_COLS = {"input_signals", "shap_values", "payment_methods_shown"}
+
     def _norm(r: dict) -> dict:
         d = dict(r)
         for k, v in list(d.items()):
-            if hasattr(v, "isoformat"):
-                d[k] = v.isoformat()
-            elif str(type(v)) == "<class 'decimal.Decimal'>":
-                d[k] = float(v)
+            if k in _JSON_COLS and isinstance(v, str):
+                try:
+                    d[k] = _json.loads(v)
+                    continue
+                except (ValueError, TypeError):
+                    pass
+            d[k] = _scalar(v)
         return d
 
     return {
