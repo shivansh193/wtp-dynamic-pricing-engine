@@ -47,3 +47,9 @@ scripts/smoke_output.json
 # ---- OS noise ----
 .DS_Store
 Thumbs.db
+
+# ---- Vercel CLI ----
+.vercel/
+.env.local
+.env.*.local
+!.env.example
