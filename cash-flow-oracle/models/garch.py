@@ -38,17 +38,21 @@ class GarchResult:
     engine: str
 
     def forecast_vol(self, horizon: int) -> np.ndarray:
-        """Iterate the GARCH(1,1) variance recursion forward."""
+        """Standard GARCH(1,1) multi-step variance forecast.
+
+        1-step:   sigma^2_{t+1} = omega + alpha*eps^2_t + beta*sigma^2_t
+        h-step:   sigma^2_{t+h} = omega + (alpha+beta)*sigma^2_{t+h-1}
+                  (E[eps^2] = sigma^2 for h>1), which mean-reverts to the
+                  unconditional variance omega/(1-alpha-beta) on its own -
+                  no ad-hoc blending needed.
+        """
         out = np.empty(horizon)
-        var = self._last_var
-        resid2 = self._last_resid2
-        uncond = self._omega / max(1e-12, 1 - self._alpha - self._beta)
-        for h in range(horizon):
-            var = self._omega + self._alpha * resid2 + self._beta * var
-            # beyond 1 step ahead E[resid^2] = var
-            resid2 = var
-            # pull gently toward the unconditional level for long horizons
-            var = 0.9 * var + 0.1 * uncond
+        persistence = self._alpha + self._beta
+        # step 1 uses the realised last squared residual
+        var = self._omega + self._alpha * self._last_resid2 + self._beta * self._last_var
+        out[0] = np.sqrt(max(var, 1e-12))
+        for h in range(1, horizon):
+            var = self._omega + persistence * var
             out[h] = np.sqrt(max(var, 1e-12))
         return out
 

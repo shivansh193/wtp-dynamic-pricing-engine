@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { wsBase } from "./api";
+import { getAllSessions, wsBase } from "./api";
 import type { SessionInfo, WsMessage } from "./types";
 
 /**
@@ -71,6 +71,22 @@ export function useSessionsFeed(
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // fallback: while the socket is down, poll /sessions/all so the table still
+  // updates (relevant on hosts where WebSockets are unreliable)
+  useEffect(() => {
+    if (connected) return;
+    let alive = true;
+    const poll = () =>
+      getAllSessions()
+        .then((r) => alive && r.sessions.length && setSessions(r.sessions))
+        .catch(() => {});
+    const id = setInterval(poll, 5000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [connected]);
 
   return { sessions, setSessions, connected };
 }

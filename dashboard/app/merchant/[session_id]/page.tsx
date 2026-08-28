@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ConversionCurve } from "@/components/ConversionCurve";
-import { ShapWaterfall } from "@/components/ShapWaterfall";
+import { ShapWaterfall, ShapWaterfallNote } from "@/components/ShapWaterfall";
 import { getDecision, getSegmentStats, getSession } from "@/lib/api";
 import { DEVICE_LABEL, OFFER_LABEL, inr } from "@/lib/profiles";
 import type { SegmentStats, SessionInfo } from "@/lib/types";
@@ -127,11 +127,18 @@ export default function MerchantPage({
       {/* SHAP waterfall */}
       <Card title="SHAP waterfall — how each signal moved the WTP">
         {shapAll.length ? (
-          <ShapWaterfall
-            baseValue={baseValue}
-            contributions={shapAll}
-            predicted={res?.wtp_multiplier}
-          />
+          <>
+            <ShapWaterfall
+              baseValue={baseValue}
+              contributions={shapAll}
+              predicted={res?.wtp_multiplier}
+            />
+            <ShapWaterfallNote
+              baseValue={baseValue}
+              contributions={shapAll}
+              predicted={res?.wtp_multiplier}
+            />
+          </>
         ) : (
           <p className="text-xs text-slate-400">available after the session is priced</p>
         )}
@@ -163,11 +170,15 @@ export default function MerchantPage({
               />
               <Row
                 k="95% credible interval"
-                v={`[${seg.posterior.ci_95[0].toFixed(3)} – ${seg.posterior.ci_95[1].toFixed(3)}]`}
+                v={`[${seg.posterior.ci_95[0].toFixed(3)} – ${seg.posterior.ci_95[1].toFixed(3)}] · ${seg.posterior.ci_method}, ${seg.posterior.dof.toFixed(0)} dof`}
               />
               <Row
                 k="Prior"
-                v={`×${seg.prior.mean.toFixed(2)} (sd ${seg.prior.sd})`}
+                v={`×${seg.prior.mean.toFixed(2)} (implied sd ${seg.prior.implied_sd})`}
+              />
+              <Row
+                k="Predictive sd (1 shopper)"
+                v={`±${seg.posterior.predictive_sd_single_shopper.toFixed(3)}`}
               />
               {seg.observed.mean_wtp != null && (
                 <Row

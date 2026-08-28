@@ -58,6 +58,10 @@ export function ShapWaterfall({
     .sort((a, b) => Math.abs(b.shap) - Math.abs(a.shap));
   const shown = sorted.slice(0, maxRows);
   const restSum = sorted.slice(maxRows).reduce((s, c) => s + c.shap, 0);
+  // SHAP is additive: base + sum(all contributions) = the model's raw output.
+  const shapTotal = baseValue + sorted.reduce((s, c) => s + c.shap, 0);
+  // the price actually shown may be the raw output clipped to the +15%/-10% band
+  const capped = predicted != null && Math.abs(predicted - shapTotal) > 0.003;
 
   const rows: { name: string; sub: string; start: number; delta: number }[] = [];
   let running = baseValue;
@@ -76,15 +80,16 @@ export function ShapWaterfall({
     running += restSum;
   }
   rows.push({
-    name: "Predicted WTP",
-    sub: predicted != null ? `×${predicted.toFixed(3)}` : `×${running.toFixed(3)}`,
+    name: capped ? "Model output (pre-cap)" : "Predicted WTP",
+    sub: `×${shapTotal.toFixed(3)}`,
     start: 0,
-    delta: predicted ?? running,
+    delta: shapTotal,
   });
 
   // stacked bar: [invisible offset, visible delta]
+  const TOTAL_ROWS = new Set(["Base (avg WTP)", "Predicted WTP", "Model output (pre-cap)"]);
   const data = rows.map((r) => {
-    const isTotal = r.name.startsWith("Base") || r.name.startsWith("Predicted");
+    const isTotal = TOTAL_ROWS.has(r.name);
     const lo = isTotal ? 0 : Math.min(r.start, r.start + r.delta);
     const mag = isTotal ? Math.abs(r.delta) : Math.abs(r.delta);
     return {
@@ -138,5 +143,24 @@ export function ShapWaterfall({
         </Bar>
       </BarChart>
     </ResponsiveContainer>
+  );
+}
+
+export function ShapWaterfallNote({
+  baseValue,
+  contributions,
+  predicted,
+}: {
+  baseValue: number;
+  contributions: { shap: number }[];
+  predicted?: number;
+}) {
+  const shapTotal = baseValue + contributions.reduce((s, c) => s + c.shap, 0);
+  if (predicted == null || Math.abs(predicted - shapTotal) <= 0.003) return null;
+  return (
+    <p className="mt-1 text-[10px] text-slate-400">
+      SHAP sums to the model&apos;s raw output ×{shapTotal.toFixed(3)}; the price
+      shown uses ×{predicted.toFixed(3)} after the +15% / −10% cap.
+    </p>
   );
 }

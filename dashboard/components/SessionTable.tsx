@@ -44,10 +44,10 @@ export function SessionTable({ refreshSignal }: { refreshSignal?: number }) {
         <span className="flex items-center gap-1.5 text-[10px] text-slate-400">
           <span
             className={`h-1.5 w-1.5 rounded-full ${
-              connected ? "bg-emerald-500" : "bg-slate-300"
+              connected ? "bg-emerald-500" : "bg-amber-400"
             }`}
           />
-          {connected ? "live" : "reconnecting"} · {backend || "…"}
+          {connected ? "live (websocket)" : "polling"} · {backend || "…"}
         </span>
       </div>
 

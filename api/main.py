@@ -442,6 +442,11 @@ def _segment_revenue(seg_rows: list[dict]) -> dict:
         "expected_revenue_flat_pricing": round(rev_flat, 2),
         "absolute_lift": round(lift, 2),
         "pct_lift": round((lift / rev_flat * 100.0) if rev_flat else 0.0, 3),
+        "n_decisions": len(seg_rows),
+        "note": "expected revenue per impression = price x P(convert at that price), "
+                "summed over logged decisions for this segment. Assumes the conversion "
+                "model is calibrated; ignores margin/COGS and repeat-purchase effects. "
+                "Sensitive to sample size and traffic mix.",
     }
 
 

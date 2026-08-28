@@ -231,7 +231,47 @@ codebase and the cap constants are the first thing a reviewer should check
 | **Festival calendar and RBI demand index are static files.** | Live feeds; per-category, per-region demand nowcasting. |
 | **No holdout / guardrail monitoring in production.** | Always keep a control slice at list price to measure true lift and detect model drift; alert if realised margin or conversion drops. |
 | **Single-region, single-currency.** | Multi-currency, GST-inclusive display rules, state-level COD policies. |
-| **Docker images built but not run in this environment** (Docker daemon was offline during the build session). | CI builds + smoke-tests the compose stack on every push. |
+
+### On the statistics (what a sharp reviewer should poke at)
+
+- **Segment posterior** (`api/segment_stats.py`) — a proper Normal-Inverse-Gamma
+  conjugate update (unknown mean *and* variance), so the 95% interval is a
+  **Student-t** interval with `nu = 2*a_n` dof, not a z-interval. It is
+  **clipped to [0.85, 1.25]** because WTP is truncated at the price band — an
+  un-clipped Normal CI would poke past the cap. Still: the "observations" are
+  the estimator's *predicted* WTP for past shoppers, not realised WTP, so this
+  is a posterior over *model output per segment*, not a causal WTP estimate.
+  Response is labelled `measures: "model-predicted WTP multiplier"`.
+- **Conversion-probability curve** in the segment view reuses the logistic
+  price-response shape the synthetic generator was built with
+  (`sigmoid(8.5 * (WTP - offered))`). With real data this comes from the fitted
+  conversion classifier, which would also need Platt/isotonic **calibration**
+  before its probabilities feed a revenue number.
+- **Revenue-lift simulation** is *expected revenue per impression*
+  (`price x P(convert)`), summed over logged decisions. It **ignores
+  margin/COGS** (so it understates profit lift on a markup), ignores
+  repeat-purchase/LTV, assumes the conversion model is calibrated, and is
+  **sensitive to sample size and the segment mix** of whatever traffic has been
+  logged. The endpoint returns a `caveat` string saying exactly this; treat the
+  headline % as directional, not a forecast.
+- **SHAP waterfall** sums (base + all contributions) to the model's **raw**
+  output; the price shown is that value **clipped** to +15%/−10%. The merchant
+  view shows both and labels the capped case, so the additive identity stays
+  visibly exact.
+- **GARCH(1,1) multi-step** (Track 04) uses the textbook recursion
+  `sigma^2_{t+h} = omega + (alpha+beta) sigma^2_{t+h-1}`, which mean-reverts to
+  `omega/(1-alpha-beta)` on its own — no ad-hoc blending.
+
+### Environment notes
+
+- Docker Desktop hung on startup once (stale socket) — fixed by renaming
+  `%LOCALAPPDATA%\Docker\run`. After that the full `docker compose` stack was
+  built and verified (`scripts/verify_stack.sh`, 26/26).
+- **Backend cannot run on Vercel** — `/ws/sessions` needs a long-lived process
+  (no WebSocket servers on Vercel functions) and the LightGBM + SHAP + SciPy
+  bundle far exceeds the serverless size limit. Frontend → Vercel, backend →
+  Railway/Render (a container host). The dashboard falls back to polling
+  `/sessions/all` if the WebSocket can't connect.
 
 ---
 

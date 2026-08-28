@@ -1,15 +1,26 @@
 """
-Bayesian posterior over a segment's WTP multiplier.
+Posterior over a segment's WTP multiplier.
 
-Model: Normal-Normal conjugate with known observation noise.
-  prior      mean  mu0 = 1.00   (list price), sd  tau0 = 0.08
-  likelihood x_i ~ N(mu, sigma^2),  sigma = max(observed sd, 0.02)
-  posterior  mu | data  ~  N(mu_n, tau_n^2)
-      tau_n^2 = 1 / (1/tau0^2 + n/sigma^2)
-      mu_n    = tau_n^2 * (mu0/tau0^2 + sum(x_i)/sigma^2)
+Framing: the observations are the WTP *estimator's predictions* for past
+shoppers in this segment, not realised willingness-to-pay (unobservable without
+a controlled price experiment). So this is a posterior over "what the model
+outputs for this segment", with sampling uncertainty - useful for showing how
+tight the pricing is per segment, not a causal WTP.
 
-Observations come from the logged pricing decisions whose
-(city_tier | device_type | payment_method_preference) equals `segment_key`.
+Model: conjugate Normal for the segment mean with a *weak* prior, so once a
+handful of decisions exist the data dominates:
+
+    prior     mu ~ N(m0 = 1.00, tau0 = 0.15)          (tau0 = prior SD of the mean)
+    data      x_i ~ N(mu, sigma^2),  sigma = max(sample SD, SIGMA_FLOOR)
+    posterior mu | data ~ N(m_n, s_n^2)
+        prec_n = 1/tau0^2 + n/sigma^2
+        m_n    = (m0/tau0^2 + sum x_i / sigma^2) / prec_n
+        s_n^2  = 1 / prec_n
+
+Because sigma is estimated from the same n points, the 95% interval widens it to
+a **Student-t** interval with (n - 1) dof (falls back to the normal 1.96 for
+n < 2 or when SciPy is unavailable), and is **clipped to [0.85, 1.25]** since
+WTP is truncated at the price band.
 """
 
 from __future__ import annotations
@@ -19,8 +30,16 @@ import math
 from typing import Any
 
 PRIOR_MEAN = 1.00
-PRIOR_SD = 0.08
-MIN_SIGMA = 0.02
+PRIOR_SD = 0.15          # weak - ~8-10 decisions outweigh it
+SIGMA_FLOOR = 0.015      # guards against overconfidence when predictions cluster
+WTP_MIN, WTP_MAX = 0.85, 1.25
+
+try:
+    from scipy.stats import t as _student_t  # type: ignore
+
+    _HAVE_SCIPY = True
+except Exception:  # noqa: BLE001
+    _HAVE_SCIPY = False
 
 
 def _signals(row: dict) -> dict:
@@ -38,6 +57,12 @@ def _key(sig: dict) -> str:
                     ("city_tier", "device_type", "payment_method_preference"))
 
 
+def _crit(dof: float) -> float:
+    if _HAVE_SCIPY and dof >= 1:
+        return float(_student_t.ppf(0.975, dof))
+    return 1.959964
+
+
 def posterior(segment_key: str, decision_rows: list[dict]) -> dict[str, Any]:
     xs: list[float] = []
     for r in decision_rows:
@@ -48,41 +73,51 @@ def posterior(segment_key: str, decision_rows: list[dict]) -> dict[str, Any]:
                 continue
 
     n = len(xs)
-    obs_mean = sum(xs) / n if n else None
+    xbar = sum(xs) / n if n else None
     obs_sd = (
-        math.sqrt(sum((x - obs_mean) ** 2 for x in xs) / n) if n > 1 else None
+        math.sqrt(sum((x - xbar) ** 2 for x in xs) / (n - 1)) if n > 1 else None
     )
 
-    sigma = max(obs_sd or 0.0, MIN_SIGMA)
-    prior_prec = 1.0 / (PRIOR_SD ** 2)
-    like_prec = n / (sigma ** 2) if n else 0.0
-    post_var = 1.0 / (prior_prec + like_prec)
-    post_mean = post_var * (PRIOR_MEAN * prior_prec + (sum(xs) / (sigma ** 2) if n else 0.0))
-    post_sd = math.sqrt(post_var)
+    sigma = max(obs_sd or 0.0, SIGMA_FLOOR)
+    prior_prec = 1.0 / PRIOR_SD ** 2
+    like_prec = n / sigma ** 2 if n else 0.0
+    prec_n = prior_prec + like_prec
+    m_n = (PRIOR_MEAN * prior_prec + (sum(xs) / sigma ** 2 if n else 0.0)) / prec_n
+    s_n = math.sqrt(1.0 / prec_n)
 
-    ci_lo = post_mean - 1.96 * post_sd
-    ci_hi = post_mean + 1.96 * post_sd
+    dof = max(n - 1, 1)
+    crit = _crit(dof)
+    ci_lo = max(WTP_MIN, m_n - crit * s_n)
+    ci_hi = min(WTP_MAX, m_n + crit * s_n)
 
-    # rough conversion-probability curve across price multipliers for this segment
-    # (logistic in the gap between the posterior WTP and the offered multiplier)
+    # spread of a single new shopper's predicted WTP (not the mean) in this segment
+    pred_sd = math.sqrt(sigma ** 2 + s_n ** 2)
+
+    # segment conversion-probability curve. NOTE: this uses the logistic
+    # price-response shape the synthetic generator was built with; with real
+    # data it comes from the fitted (and calibrated) conversion classifier.
     curve = []
     for m in [0.90, 0.95, 1.00, 1.05, 1.10, 1.15]:
-        gap = post_mean - m
-        p = 1.0 / (1.0 + math.exp(-8.5 * gap))
+        p = 1.0 / (1.0 + math.exp(-8.5 * (m_n - m)))
         curve.append({"price_multiplier": m, "conversion_probability": round(p, 4)})
 
     return {
         "segment_key": segment_key,
         "n_observations": n,
+        "measures": "model-predicted WTP multiplier (not realised WTP)",
         "prior": {"mean": PRIOR_MEAN, "sd": PRIOR_SD},
         "observed": {
-            "mean_wtp": round(obs_mean, 5) if obs_mean is not None else None,
+            "mean_wtp": round(xbar, 5) if xbar is not None else None,
             "sd_wtp": round(obs_sd, 5) if obs_sd is not None else None,
         },
         "posterior": {
-            "mean_wtp": round(post_mean, 5),
-            "sd": round(post_sd, 5),
+            "mean_wtp": round(m_n, 5),
+            "sd": round(s_n, 5),
+            "dof": dof,
             "ci_95": [round(ci_lo, 5), round(ci_hi, 5)],
+            "ci_method": "student-t" if (_HAVE_SCIPY and n > 1) else "normal-approx",
+            "ci_clipped_to_price_band": [WTP_MIN, WTP_MAX],
+            "predictive_sd_single_shopper": round(pred_sd, 5),
         },
         "conversion_curve": curve,
     }

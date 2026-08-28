@@ -129,7 +129,13 @@ def compute_metrics(rows: list[dict]) -> dict:
             "expected_revenue_flat_pricing": round(rev_flat, 2),
             "absolute_lift": round(lift_abs, 2),
             "pct_lift": round(lift_pct, 3),
+            "n_decisions": n,
             "basis": "sum over logged decisions of price * P(convert at that price)",
+            "caveat": "per-impression expected revenue. Assumes the conversion model "
+                      "is well-calibrated; ignores margin/COGS (so it understates "
+                      "profit lift on markups) and repeat-purchase/LTV effects. The "
+                      "headline number is sensitive to sample size and to the segment "
+                      "mix of the logged traffic - not a production estimate.",
         },
         "top_features_driving_wtp": shap_rank[:5],
         "traffic_quality": {

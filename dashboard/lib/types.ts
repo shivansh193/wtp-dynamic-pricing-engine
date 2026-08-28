@@ -160,15 +160,25 @@ export interface SegmentStats {
   segment_key: string;
   n_observations: number;
   n_customers_like_this: number;
-  prior: { mean: number; sd: number };
+  measures?: string;
+  prior: { mean: number; kappa: number; dof: number; implied_sd: number };
   observed: { mean_wtp: number | null; sd_wtp: number | null };
-  posterior: { mean_wtp: number; sd: number; ci_95: [number, number] };
+  posterior: {
+    mean_wtp: number;
+    sd: number;
+    dof: number;
+    ci_95: [number, number];
+    ci_method: string;
+    ci_clipped_to_price_band: [number, number];
+    predictive_sd_single_shopper: number;
+  };
   conversion_curve: { price_multiplier: number; conversion_probability: number }[];
   revenue_simulation: {
     expected_revenue_wtp_pricing: number;
     expected_revenue_flat_pricing: number;
     absolute_lift: number;
     pct_lift: number;
+    note?: string;
   };
 }
 
