@@ -15,6 +15,10 @@ x-python-build: &python-build
   build:
     context: .
     dockerfile: Dockerfile
+    # compose has its own `seeder` service + a shared volume, so skip the
+    # build-time model bake (it would just be shadowed by the volume mount)
+    args:
+      BAKE_MODEL: "0"
 
 services:
   postgres:

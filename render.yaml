@@ -1,17 +1,28 @@
-# Render blueprint - one API web service + managed Postgres + managed Redis.
-# The frontend deploys to Vercel (see dashboard/vercel.json and the README).
+# Render Blueprint - free single web service, no managed datastores.
+#
+# Deploy:
+#   1. render.com -> sign in with GitHub (no card needed for the free web tier)
+#   2. New +  ->  Blueprint  ->  pick the wtp-dynamic-pricing-engine repo  ->  Apply
+#   3. after the first deploy, set PUBLIC_BASE_URL to your Vercel URL and redeploy
+#
+# The API self-seeds on first boot (offline data + fast train, ~2 min) and then
+# degrades gracefully to in-memory stores - no Postgres/Redis required for the
+# demo. Add Render Key Value + Postgres later and set REDIS_URL / DATABASE_URL
+# if you want persistence.
+#
+# Free instances sleep after 15 min idle and cold-start in ~50 s. For a live
+# panel demo, hit the URL once a few minutes beforehand to warm it, or bump the
+# plan to "starter" for always-on.
 services:
   - type: web
     name: wtp-pricing-api
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    plan: standard          # LightGBM training on first boot needs ~1GB RAM
+    plan: free
+    region: singapore
     healthCheckPath: /health
-    startCommand: bash scripts/start.sh
     envVars:
-      - key: PORT
-        value: "8000"
       - key: SYNTHETIC_ROWS
         value: "20000"
       - key: TRAIN_FAST
@@ -21,24 +32,6 @@ services:
       - key: DB_REQUIRED
         value: "false"
       - key: CORS_ALLOW_ALL
-        value: "true"        # tighten to your Vercel domain once known
+        value: "true"          # or leave unset - *.vercel.app is allowed by default
       - key: PUBLIC_BASE_URL
-        sync: false          # set to your Vercel URL, e.g. https://razorpay-wtp.vercel.app
-      - key: DATABASE_URL
-        fromDatabase:
-          name: wtp-postgres
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          type: keyvalue
-          name: wtp-redis
-          property: connectionString
-
-databases:
-  - name: wtp-postgres
-    plan: basic-256mb
-
-  - name: wtp-redis
-    type: keyvalue
-    plan: free
-    ipAllowList: []
+        sync: false             # set to your Vercel URL after the first deploy

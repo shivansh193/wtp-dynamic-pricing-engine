@@ -30,9 +30,22 @@ COPY pytest.ini .
 RUN mkdir -p /app/data/raw /app/data/processed /app/model/artifacts \
     && chmod +x scripts/*.sh
 
+# Bake the dataset + trained models INTO the image so a single-container deploy
+# (Render / Fly / `docker run`) cold-starts in seconds instead of self-seeding
+# for ~2 min on every scale-from-zero. Fully offline, deterministic.
+# (docker-compose mounts a named volume over /app/model/artifacts, so its
+# `seeder` service still regenerates these there - this build-time seed is only
+# used when nothing is mounted.)
+ARG BAKE_MODEL=1
+ARG SYNTHETIC_ROWS=20000
+RUN if [ "$BAKE_MODEL" = "1" ]; then \
+      OMP_NUM_THREADS=4 SYNTHETIC_ROWS=$SYNTHETIC_ROWS TRAIN_FAST=1 \
+        bash scripts/seed_offline.sh ; \
+    fi
+
 EXPOSE 8000
 
-# Default entrypoint self-seeds (data + model) when artifacts are missing, then
-# starts the API - so a single-container deploy (Railway / Render / `docker run`)
-# just works. docker-compose overrides `command:` (its `seeder` handles this).
+# start.sh runs the API; it self-seeds only if artifacts are somehow absent
+# (e.g. BAKE_MODEL=0 or a volume shadowed them). docker-compose overrides
+# `command:` and relies on its own `seeder` service instead.
 CMD ["bash", "scripts/start.sh"]
