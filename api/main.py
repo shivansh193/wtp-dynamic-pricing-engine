@@ -428,25 +428,41 @@ def _seg_key(decision_row: dict) -> str:
 def _segment_revenue(seg_rows: list[dict]) -> dict:
     import json as _json
 
-    rev_wtp = rev_flat = 0.0
+    gm = settings.GROSS_MARGIN
+    rev_wtp = rev_flat = mgn_wtp = mgn_flat = 0.0
     for r in seg_rows:
         sv = r.get("shap_values")
         sv = _json.loads(sv) if isinstance(sv, str) else (sv or {})
         c_adj = float(sv.get("conversion_at_adjusted") or 0.0)
         c_list = float(sv.get("conversion_at_list") or c_adj)
-        rev_wtp += float(r.get("final_price") or 0.0) * c_adj
-        rev_flat += float(r.get("list_price") or 0.0) * c_list
-    lift = rev_wtp - rev_flat
+        lp = float(r.get("list_price") or 0.0)
+        fp = float(r.get("final_price") or 0.0)
+        cogs = lp * (1.0 - gm)  # same unit cost whatever we charge
+        rev_wtp += fp * c_adj
+        rev_flat += lp * c_list
+        mgn_wtp += (fp - cogs) * c_adj
+        mgn_flat += (lp - cogs) * c_list
+    rev_lift = rev_wtp - rev_flat
+    mgn_lift = mgn_wtp - mgn_flat
     return {
+        # topline
         "expected_revenue_wtp_pricing": round(rev_wtp, 2),
         "expected_revenue_flat_pricing": round(rev_flat, 2),
-        "absolute_lift": round(lift, 2),
-        "pct_lift": round((lift / rev_flat * 100.0) if rev_flat else 0.0, 3),
+        "revenue_pct_lift": round((rev_lift / rev_flat * 100.0) if rev_flat else 0.0, 3),
+        # margin (the headline - a markup is a margin play, same COGS)
+        "gross_margin_assumption": gm,
+        "expected_margin_wtp_pricing": round(mgn_wtp, 2),
+        "expected_margin_flat_pricing": round(mgn_flat, 2),
+        "margin_absolute_lift": round(mgn_lift, 2),
+        "pct_lift": round((mgn_lift / mgn_flat * 100.0) if mgn_flat else 0.0, 3),
         "n_decisions": len(seg_rows),
-        "note": "expected revenue per impression = price x P(convert at that price), "
-                "summed over logged decisions for this segment. Assumes the conversion "
-                "model is calibrated; ignores margin/COGS and repeat-purchase effects. "
-                "Sensitive to sample size and traffic mix.",
+        "note": f"expected per impression = value x P(convert at that price). "
+                f"Headline pct_lift is on GROSS MARGIN (assumes {gm:.0%} margin, "
+                f"COGS unchanged by price) - a markup keeps its extra rupees even "
+                f"when a few price-sensitive buyers drop, so revenue lift can be "
+                f"flat/negative on a premium segment while margin lift is clearly "
+                f"positive. Assumes the conversion model is calibrated; ignores "
+                f"repeat-purchase/LTV. Sensitive to sample size + traffic mix.",
     }
 
 

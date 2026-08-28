@@ -87,13 +87,27 @@ export function SegmentExplorer({ seedSegment }: { seedSegment?: string }) {
               {rev && (
                 <>
                   <p className="mt-1">
-                    Expected revenue — WTP pricing{" "}
-                    <strong>{inr(rev.expected_revenue_wtp_pricing)}</strong> vs
-                    flat <strong>{inr(rev.expected_revenue_flat_pricing)}</strong>
+                    Expected gross margin — WTP{" "}
+                    <strong>{inr(rev.expected_margin_wtp_pricing ?? 0)}</strong> vs
+                    flat <strong>{inr(rev.expected_margin_flat_pricing ?? 0)}</strong>
                   </p>
-                  <p className="mt-0.5 font-medium text-brand-dark">
+                  <p
+                    className={`mt-0.5 font-medium ${
+                      rev.pct_lift >= 0 ? "text-brand-dark" : "text-amber-700"
+                    }`}
+                  >
                     {rev.pct_lift >= 0 ? "+" : ""}
-                    {rev.pct_lift.toFixed(1)}% lift ({inr(rev.absolute_lift)})
+                    {rev.pct_lift.toFixed(1)}% margin lift
+                    {typeof rev.revenue_pct_lift === "number" && (
+                      <span className="text-slate-400">
+                        {" "}· revenue {rev.revenue_pct_lift >= 0 ? "+" : ""}
+                        {rev.revenue_pct_lift.toFixed(1)}%
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-[10px] text-slate-400">
+                    assumes {((rev.gross_margin_assumption ?? 0.45) * 100).toFixed(0)}%
+                    gross margin
                   </p>
                 </>
               )}

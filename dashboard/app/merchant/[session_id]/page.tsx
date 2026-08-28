@@ -107,17 +107,34 @@ export default function MerchantPage({
           )}
         </Card>
 
-        <Card title="Revenue vs flat pricing (segment)">
+        <Card title="Expected margin vs flat pricing (segment)">
           {seg?.revenue_simulation ? (
-            <div className="space-y-1 text-xs text-slate-600">
-              <p className="text-2xl font-bold text-brand-dark">
-                {seg.revenue_simulation.pct_lift >= 0 ? "+" : ""}
-                {seg.revenue_simulation.pct_lift.toFixed(1)}%
-              </p>
-              <Row k="WTP pricing" v={inr(seg.revenue_simulation.expected_revenue_wtp_pricing)} />
-              <Row k="Flat pricing" v={inr(seg.revenue_simulation.expected_revenue_flat_pricing)} />
-              <Row k="Abs. lift" v={inr(seg.revenue_simulation.absolute_lift)} />
-            </div>
+            (() => {
+              const rs = seg.revenue_simulation;
+              return (
+                <div className="space-y-1 text-xs text-slate-600">
+                  <p
+                    className={`text-2xl font-bold ${
+                      rs.pct_lift >= 0 ? "text-brand-dark" : "text-amber-700"
+                    }`}
+                  >
+                    {rs.pct_lift >= 0 ? "+" : ""}
+                    {rs.pct_lift.toFixed(1)}%{" "}
+                    <span className="text-xs font-normal text-slate-400">margin</span>
+                  </p>
+                  <Row k="Margin — WTP" v={inr(rs.expected_margin_wtp_pricing ?? 0)} />
+                  <Row k="Margin — flat" v={inr(rs.expected_margin_flat_pricing ?? 0)} />
+                  <Row
+                    k="Revenue lift"
+                    v={`${(rs.revenue_pct_lift ?? 0) >= 0 ? "+" : ""}${(rs.revenue_pct_lift ?? 0).toFixed(1)}%`}
+                  />
+                  <p className="pt-1 text-[10px] text-slate-400">
+                    assumes {((rs.gross_margin_assumption ?? 0.45) * 100).toFixed(0)}% gross
+                    margin, COGS unchanged by price
+                  </p>
+                </div>
+              );
+            })()
           ) : (
             <p className="text-xs text-slate-400">not enough data yet</p>
           )}
@@ -174,7 +191,7 @@ export default function MerchantPage({
               />
               <Row
                 k="Prior"
-                v={`×${seg.prior.mean.toFixed(2)} (implied sd ${seg.prior.implied_sd})`}
+                v={`×${seg.prior.mean.toFixed(2)} (sd ${seg.prior.sd})`}
               />
               <Row
                 k="Predictive sd (1 shopper)"

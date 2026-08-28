@@ -54,10 +54,18 @@ def compute_metrics(rows: list[dict]) -> dict:
     by_device: dict[str, list[float]] = defaultdict(list)
     by_pay: dict[str, list[float]] = defaultdict(list)
 
-    # ---- conversion rate by offer type + revenue lift ----
+    # ---- conversion rate by offer type + revenue/margin lift ----
     offer_conv: dict[str, list[float]] = defaultdict(list)
     rev_wtp = 0.0
     rev_flat = 0.0
+    mgn_wtp = 0.0
+    mgn_flat = 0.0
+    try:
+        from .config import settings as _s
+
+        GROSS_MARGIN = _s.GROSS_MARGIN
+    except Exception:  # noqa: BLE001
+        GROSS_MARGIN = 0.45
 
     # ---- shap aggregation ----
     shap_accum: dict[str, list[float]] = defaultdict(list)
@@ -90,6 +98,10 @@ def compute_metrics(rows: list[dict]) -> dict:
         # expected revenue per checkout impression = price * P(convert at that price)
         rev_wtp += final_price * c_adj_v
         rev_flat += list_price * c_list_v
+        # expected gross margin: COGS is unchanged by the price we charge
+        cogs = list_price * (1.0 - GROSS_MARGIN)
+        mgn_wtp += (final_price - cogs) * c_adj_v
+        mgn_flat += (list_price - cogs) * c_list_v
 
         for item in shap.get("all", []) or shap.get("top", []) or []:
             if isinstance(item, dict) and "feature" in item:
@@ -112,6 +124,8 @@ def compute_metrics(rows: list[dict]) -> dict:
 
     lift_abs = rev_wtp - rev_flat
     lift_pct = (lift_abs / rev_flat * 100.0) if rev_flat else 0.0
+    mgn_lift_abs = mgn_wtp - mgn_flat
+    mgn_lift_pct = (mgn_lift_abs / mgn_flat * 100.0) if mgn_flat else 0.0
 
     return {
         "decisions_logged": n,
@@ -127,15 +141,22 @@ def compute_metrics(rows: list[dict]) -> dict:
         "revenue_lift_simulation": {
             "expected_revenue_wtp_pricing": round(rev_wtp, 2),
             "expected_revenue_flat_pricing": round(rev_flat, 2),
-            "absolute_lift": round(lift_abs, 2),
-            "pct_lift": round(lift_pct, 3),
+            "revenue_pct_lift": round(lift_pct, 3),
+            "gross_margin_assumption": GROSS_MARGIN,
+            "expected_margin_wtp_pricing": round(mgn_wtp, 2),
+            "expected_margin_flat_pricing": round(mgn_flat, 2),
+            "margin_absolute_lift": round(mgn_lift_abs, 2),
+            "pct_lift": round(mgn_lift_pct, 3),
+            "absolute_lift": round(mgn_lift_abs, 2),
             "n_decisions": n,
-            "basis": "sum over logged decisions of price * P(convert at that price)",
-            "caveat": "per-impression expected revenue. Assumes the conversion model "
-                      "is well-calibrated; ignores margin/COGS (so it understates "
-                      "profit lift on markups) and repeat-purchase/LTV effects. The "
-                      "headline number is sensitive to sample size and to the segment "
-                      "mix of the logged traffic - not a production estimate.",
+            "basis": "per impression: value x P(convert at that price), over logged decisions",
+            "caveat": f"headline pct_lift is on GROSS MARGIN (assumes "
+                      f"{GROSS_MARGIN:.0%} margin, COGS unchanged by price). A markup "
+                      f"keeps its extra rupees even when a few price-sensitive buyers "
+                      f"drop, so a premium segment can show flat/negative revenue lift "
+                      f"but clearly positive margin lift. Assumes the conversion model "
+                      f"is calibrated; ignores repeat-purchase/LTV. Sensitive to sample "
+                      f"size + traffic mix - directional, not a production estimate.",
         },
         "top_features_driving_wtp": shap_rank[:5],
         "traffic_quality": {

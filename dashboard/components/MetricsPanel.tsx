@@ -165,17 +165,31 @@ export function MetricsPanel({ refreshKey }: { refreshKey: number }) {
 
         {rev && (
           <div className="flex flex-col justify-center rounded-lg bg-slate-50 p-4">
-            <p className="text-xs text-slate-500">Estimated revenue lift</p>
-            <p className="text-2xl font-bold text-brand-dark">
-              +{rev.pct_lift.toFixed(1)}%
+            <p className="text-xs text-slate-500">Estimated gross-margin lift</p>
+            <p
+              className={`text-2xl font-bold ${
+                rev.pct_lift >= 0 ? "text-brand-dark" : "text-amber-700"
+              }`}
+            >
+              {rev.pct_lift >= 0 ? "+" : ""}
+              {rev.pct_lift.toFixed(1)}%
             </p>
             <p className="text-xs text-slate-500">
-              {inr(rev.absolute_lift)} extra across{" "}
-              {data.decisions_logged} decisions vs charging list price to
-              everyone.
+              {inr(rev.margin_absolute_lift ?? rev.absolute_lift ?? 0)} extra
+              margin across {data.decisions_logged} decisions vs charging list
+              price to everyone
+              {typeof rev.revenue_pct_lift === "number" && (
+                <>
+                  {" "}
+                  · revenue {rev.revenue_pct_lift >= 0 ? "+" : ""}
+                  {rev.revenue_pct_lift.toFixed(1)}%
+                </>
+              )}
+              .
             </p>
             <p className="mt-2 text-[10px] text-slate-400">
-              basis: Σ price × P(convert at that price)
+              assumes {((rev.gross_margin_assumption ?? 0.45) * 100).toFixed(0)}%
+              gross margin, COGS unchanged by price
             </p>
           </div>
         )}

@@ -71,12 +71,7 @@ export interface MetricsResponse {
     top_10: { segment: string; avg_wtp: number }[];
   };
   conversion_rate_by_offer_type?: Record<string, number>;
-  revenue_lift_simulation?: {
-    expected_revenue_wtp_pricing: number;
-    expected_revenue_flat_pricing: number;
-    absolute_lift: number;
-    pct_lift: number;
-  };
+  revenue_lift_simulation?: RevenueSim;
   top_features_driving_wtp?: { feature: string; mean_abs_shap: number }[];
   traffic_quality?: {
     ip_type_counts: Record<string, number>;
@@ -161,7 +156,7 @@ export interface SegmentStats {
   n_observations: number;
   n_customers_like_this: number;
   measures?: string;
-  prior: { mean: number; kappa: number; dof: number; implied_sd: number };
+  prior: { mean: number; sd: number };
   observed: { mean_wtp: number | null; sd_wtp: number | null };
   posterior: {
     mean_wtp: number;
@@ -173,13 +168,22 @@ export interface SegmentStats {
     predictive_sd_single_shopper: number;
   };
   conversion_curve: { price_multiplier: number; conversion_probability: number }[];
-  revenue_simulation: {
-    expected_revenue_wtp_pricing: number;
-    expected_revenue_flat_pricing: number;
-    absolute_lift: number;
-    pct_lift: number;
-    note?: string;
-  };
+  revenue_simulation: RevenueSim;
+}
+
+export interface RevenueSim {
+  expected_revenue_wtp_pricing: number;
+  expected_revenue_flat_pricing: number;
+  revenue_pct_lift?: number;
+  gross_margin_assumption?: number;
+  expected_margin_wtp_pricing?: number;
+  expected_margin_flat_pricing?: number;
+  margin_absolute_lift?: number;
+  absolute_lift?: number;
+  pct_lift: number;
+  n_decisions?: number;
+  note?: string;
+  caveat?: string;
 }
 
 export interface WsMessage {

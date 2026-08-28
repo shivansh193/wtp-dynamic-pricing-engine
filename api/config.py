@@ -49,6 +49,11 @@ class Settings:
     # ---- public URLs (link generator builds customer/merchant links) ----
     PUBLIC_BASE_URL: str = _env("PUBLIC_BASE_URL", "https://razorpay-wtp.vercel.app").rstrip("/")
 
+    # Assumed blended gross margin for the "expected margin vs flat" simulation.
+    # A markup is a margin play, not a topline-revenue play: same COGS, so the
+    # extra rupees are ~pure margin even when a few price-sensitive buyers drop.
+    GROSS_MARGIN: float = float(_env("GROSS_MARGIN", "0.45"))
+
     # ---- misc ----
     SERVICE_NAME: str = "wtp-pricing-engine"
     VERSION: str = "1.1.0"
