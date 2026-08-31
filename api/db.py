@@ -27,7 +27,9 @@ class _MemoryStore:
 
     def __init__(self, maxlen: int = 20_000):
         self._rows: deque[dict] = deque(maxlen=maxlen)
+        self._iv: deque[dict] = deque(maxlen=80_000)   # intervention events
         self._id = 0
+        self._iv_id = 0
 
     def insert(self, row: dict) -> int:
         self._id += 1
@@ -40,6 +42,26 @@ class _MemoryStore:
 
     def all(self) -> list[dict]:
         return list(self._rows)
+
+    # ---- intervention events ---- #
+    def add_interventions(self, evs: list[dict]) -> None:
+        for e in evs:
+            self._iv_id += 1
+            self._iv.append({**e, "id": self._iv_id,
+                             "created_at": datetime.now(timezone.utc),
+                             "converted": e.get("converted")})
+
+    def settle_interventions(self, session_id: str, converted: bool) -> int:
+        n = 0
+        for e in self._iv:
+            if e["session_id"] == session_id and e.get("converted") is None:
+                e["converted"] = bool(converted)
+                e["settled_at"] = datetime.now(timezone.utc)
+                n += 1
+        return n
+
+    def interventions_all(self) -> list[dict]:
+        return list(self._iv)
 
 
 class Database:
@@ -142,10 +164,118 @@ class Database:
             )
         return [dict(r) for r in rows]
 
-    async def fatigued_interventions(self, session_id: str) -> set:
-        """Intervention ids this session has been shown 3+ times without a
-        conversion. Populated by the intervention log (Step 6); empty until then."""
-        return set()
+    # ------------------------------------------------------------------ #
+    # Intervention performance tracker (Step 6)
+    # ------------------------------------------------------------------ #
+    async def log_interventions(self, *, session_id: str, segment_key: str | None,
+                                product_category: str | None, list_price: float | None,
+                                final_price: float | None, friction_type: str | None,
+                                items: list[tuple[str, str]]) -> None:
+        """Record every intervention *shown* on one checkout (outcome unknown
+        until the session settles). Best-effort; never raises."""
+        if not items:
+            return
+        evs = [{
+            "session_id": session_id, "segment_key": segment_key,
+            "product_category": product_category, "list_price": list_price,
+            "final_price": final_price, "friction_type": friction_type,
+            "intervention_id": iid, "slot": slot, "converted": None,
+        } for iid, slot in items]
+        if self._pool is None:
+            self._mem.add_interventions(evs)
+            return
+        try:
+            async with self._pool.acquire() as con:
+                await con.executemany(
+                    """
+                    INSERT INTO intervention_events (
+                        session_id, segment_key, product_category, list_price,
+                        final_price, friction_type, intervention_id, slot
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                    """,
+                    [(e["session_id"], e["segment_key"], e["product_category"],
+                      e["list_price"], e["final_price"], e["friction_type"],
+                      e["intervention_id"], e["slot"]) for e in evs],
+                )
+        except Exception as exc:  # noqa: BLE001
+            log(f"log_interventions failed ({exc!r}) -> memory fallback")
+            self._mem.add_interventions(evs)
+
+    async def settle_interventions(self, session_id: str, converted: bool) -> int:
+        """Stamp the outcome on every still-open intervention event for a
+        session (called when the demo session completes / abandons)."""
+        if self._pool is None:
+            return self._mem.settle_interventions(session_id, converted)
+        try:
+            async with self._pool.acquire() as con:
+                res = await con.execute(
+                    "UPDATE intervention_events SET converted=$2, settled_at=now() "
+                    "WHERE session_id=$1 AND converted IS NULL",
+                    session_id, bool(converted),
+                )
+            # asyncpg returns e.g. "UPDATE 3"
+            return int(str(res).split()[-1]) if res else 0
+        except Exception as exc:  # noqa: BLE001
+            log(f"settle_interventions failed ({exc!r}) -> memory fallback")
+            return self._mem.settle_interventions(session_id, converted)
+
+    async def intervention_events(self, limit: int = 100_000) -> list[dict]:
+        if self._pool is None:
+            return self._mem.interventions_all()
+        try:
+            async with self._pool.acquire() as con:
+                rows = await con.fetch(
+                    "SELECT * FROM intervention_events ORDER BY created_at DESC "
+                    "LIMIT $1", limit)
+            return [dict(r) for r in rows]
+        except Exception as exc:  # noqa: BLE001
+            log(f"intervention_events read failed ({exc!r})")
+            return self._mem.interventions_all()
+
+    async def fatigued_interventions(self, session_id: str,
+                                     segment_key: str | None = None) -> set[str]:
+        """Intervention ids that this 'customer' (best proxy in the demo: the
+        session's segment) has been shown 3+ times WITHOUT converting - the
+        assembler then rotates to the next intervention in the slot."""
+        THRESH = 3
+        if self._pool is not None:
+            try:
+                async with self._pool.acquire() as con:
+                    rows = await con.fetch(
+                        """
+                        SELECT intervention_id, count(*) AS n
+                        FROM intervention_events
+                        WHERE converted IS DISTINCT FROM true
+                          AND ($1::text IS NOT NULL AND segment_key = $1
+                               OR session_id = $2)
+                        GROUP BY intervention_id
+                        HAVING count(*) >= $3
+                        """,
+                        segment_key, session_id, THRESH,
+                    )
+                return {r["intervention_id"] for r in rows}
+            except Exception as exc:  # noqa: BLE001
+                log(f"fatigued_interventions query failed ({exc!r})")
+                return set()
+
+        evs = self._mem.interventions_all()
+        if not evs:
+            return set()
+        key = segment_key
+        if key is None:
+            for e in evs:
+                if e.get("session_id") == session_id and e.get("segment_key"):
+                    key = e["segment_key"]
+                    break
+        counts: dict[str, int] = {}
+        for e in evs:
+            if e.get("converted") is True:
+                continue
+            if (key and e.get("segment_key") == key) or e.get("session_id") == session_id:
+                iid = e.get("intervention_id")
+                if iid:
+                    counts[iid] = counts.get(iid, 0) + 1
+        return {iid for iid, c in counts.items() if c >= THRESH}
 
     async def fetch_all(self, limit: int = 50_000) -> list[dict]:
         if self._pool is None:

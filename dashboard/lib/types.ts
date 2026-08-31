@@ -333,3 +333,39 @@ export interface FunnelResult {
   } | null;
   note: string;
 }
+
+// ---- intervention performance tracker (friction-aware conversion engine) ----
+export interface InterventionPerfRow {
+  intervention_id: string;
+  friction_type: string | null;
+  slot: string | null;
+  display_component: string | null;
+  times_shown: number;
+  times_settled: number;
+  conversions: number;
+  conversion_rate: number | null;
+  revenue_per_shown: number;
+  lift_vs_baseline: number | null;
+  library_expected_lift: string | null;
+  psychological_mechanism: string | null;
+}
+
+export interface InterventionPerformance {
+  n_events: number;
+  n_settled: number;
+  baseline_conversion: number | null;
+  by_intervention: InterventionPerfRow[];
+  frictions_by_category: Record<
+    string,
+    { friction_type: string; count: number; share: number }[]
+  >;
+  fatigued_pairs: {
+    segment_key: string;
+    intervention_id: string;
+    times_shown: number;
+    conversions: number;
+    friction_type: string | null;
+  }[];
+  fatigue_threshold?: number;
+  note: string;
+}

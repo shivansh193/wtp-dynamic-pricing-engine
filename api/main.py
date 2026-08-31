@@ -204,6 +204,24 @@ async def personalize_endpoint(payload: CustomerSignals) -> PricingResponse:
     except Exception as exc:  # noqa: BLE001
         log(f"decision logging failed: {exc!r}", level="WARN")
 
+    # intervention performance tracker: record what was shown (outcome settles
+    # later when the demo session completes / abandons)
+    try:
+        cfg = response.checkout_config or {}
+        items = [(cfg.get("primary_intervention"), "primary"),
+                 (cfg.get("secondary_intervention"), "secondary")]
+        await db.log_interventions(
+            session_id=response.session_id,
+            segment_key=_seg_key(db_record),
+            product_category=(db_record.get("input_signals") or {}).get("product_category"),
+            list_price=response.list_price,
+            final_price=response.final_price,
+            friction_type=response.friction.primary,
+            items=[(i, s) for i, s in items if i],
+        )
+    except Exception as exc:  # noqa: BLE001
+        log(f"intervention logging failed: {exc!r}", level="WARN")
+
     # if this call belongs to a generated demo session, mark it priced and
     # push the update to the seller dashboard over the websocket
     if payload.session_id:
@@ -407,6 +425,10 @@ async def session_complete(session_id: str) -> SessionInfo:
     row = await session_store.set_status(session_id, "converted")
     if not row:
         raise HTTPException(status_code=404, detail=f"session {session_id!r} not found")
+    try:
+        await db.settle_interventions(session_id, True)
+    except Exception as exc:  # noqa: BLE001
+        log(f"intervention settle failed for {session_id}: {exc!r}", level="WARN")
     pub = _row_public(row)
     await ws_manager.broadcast("session.completed", pub)
     return SessionInfo(**pub)
@@ -417,9 +439,23 @@ async def session_abandon(session_id: str) -> SessionInfo:
     row = await session_store.set_status(session_id, "abandoned")
     if not row:
         raise HTTPException(status_code=404, detail=f"session {session_id!r} not found")
+    try:
+        await db.settle_interventions(session_id, False)
+    except Exception as exc:  # noqa: BLE001
+        log(f"intervention settle failed for {session_id}: {exc!r}", level="WARN")
     pub = _row_public(row)
     await ws_manager.broadcast("session.abandoned", pub)
     return SessionInfo(**pub)
+
+
+@app.get("/interventions/performance")
+async def interventions_performance() -> dict:
+    """Conversion rate + revenue-per-shown by intervention, frictions by
+    category, and fatigued (segment, intervention) pairs."""
+    from .intervention_perf import compute_performance
+
+    evs = await db.intervention_events()
+    return compute_performance(evs)
 
 
 @app.get("/segment/stats/{segment_key:path}")

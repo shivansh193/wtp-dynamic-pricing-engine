@@ -1,6 +1,7 @@
 import type {
   AbTestResult,
   FunnelResult,
+  InterventionPerformance,
   CustomSessionFields,
   CustomerSignals,
   MerchantConfig,
@@ -82,6 +83,10 @@ export function runAbTest(body: {
 
 export function getFunnel() {
   return jsonFetch<FunnelResult>("/funnel");
+}
+
+export function getInterventionPerformance() {
+  return jsonFetch<InterventionPerformance>("/interventions/performance");
 }
 
 export function getHealth() {

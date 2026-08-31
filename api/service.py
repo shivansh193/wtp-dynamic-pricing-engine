@@ -142,7 +142,9 @@ async def personalize(payload: CustomerSignals) -> tuple[PricingResponse, dict]:
     )
 
     # ---- 7. dynamic checkout config from the detected friction ----
-    fatigued = await _fatigued_interventions(session_id)
+    seg_key = "|".join(str(signals.get(k, "?")) for k in
+                       ("city_tier", "device_type", "payment_method_preference"))
+    fatigued = await _fatigued_interventions(session_id, seg_key)
     checkout_config = build_checkout_config(
         friction, signals, decision,
         session_id=session_id,
@@ -275,12 +277,13 @@ async def _friction_context(session_id: str, signals: dict, *, trust, cod_comple
     )
 
 
-async def _fatigued_interventions(session_id: str) -> set[str]:
-    """Intervention ids this session has already seen 3+ times without converting."""
+async def _fatigued_interventions(session_id: str,
+                                  segment_key: str | None = None) -> set[str]:
+    """Intervention ids this 'customer' has already seen 3+ times without converting."""
     try:
         from .db import db
 
-        return await db.fatigued_interventions(session_id)
+        return await db.fatigued_interventions(session_id, segment_key)
     except Exception:  # noqa: BLE001
         return set()
 

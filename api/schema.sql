@@ -103,3 +103,27 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS ix_sessions_created ON sessions (created_at DESC);
 CREATE INDEX IF NOT EXISTS ix_sessions_status  ON sessions (status);
 CREATE INDEX IF NOT EXISTS ix_sessions_segment ON sessions (segment_key);
+
+-- ==========================================================================
+-- Intervention performance tracker (friction-aware conversion engine, Step 6)
+-- One row per intervention *shown* on a checkout. `converted` stays NULL until
+-- the owning session settles (complete -> true, abandon -> false).
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS intervention_events (
+    id                BIGSERIAL PRIMARY KEY,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    settled_at        TIMESTAMPTZ,
+    session_id        TEXT        NOT NULL,
+    segment_key       TEXT,
+    product_category  TEXT,
+    list_price        NUMERIC(12,2),
+    final_price       NUMERIC(12,2),
+    friction_type     TEXT,
+    intervention_id   TEXT        NOT NULL,
+    slot              TEXT,                       -- primary | secondary
+    converted         BOOLEAN                     -- NULL = outcome not yet known
+);
+CREATE INDEX IF NOT EXISTS ix_iv_events_intervention ON intervention_events (intervention_id);
+CREATE INDEX IF NOT EXISTS ix_iv_events_session      ON intervention_events (session_id);
+CREATE INDEX IF NOT EXISTS ix_iv_events_segment      ON intervention_events (segment_key);
+CREATE INDEX IF NOT EXISTS ix_iv_events_category     ON intervention_events (product_category);

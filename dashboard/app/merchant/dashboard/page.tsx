@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { ABTestPanel } from "@/components/ABTestPanel";
 import { ConversionFunnel } from "@/components/ConversionFunnel";
+import { InterventionPerformance } from "@/components/InterventionPerformance";
 
 function Label({ children }: { children: React.ReactNode }) {
   return (
@@ -27,6 +28,11 @@ export default function MerchantDashboardPage() {
       <section>
         <Label>Conversion funnel</Label>
         <ConversionFunnel />
+      </section>
+
+      <section>
+        <Label>Intervention performance</Label>
+        <InterventionPerformance />
       </section>
 
       <section>
