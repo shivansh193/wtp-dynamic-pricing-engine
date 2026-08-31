@@ -12,8 +12,9 @@ question: *given everything we know about this shopper and this cart, what price
 and what offer maximise expected revenue without ever charging a price-sensitive
 customer more than list?*
 
-It is built as four decoupled stages joined by data contracts, so each can be
-tested, swapped, or scaled independently:
+It is built as decoupled stages joined by data contracts, so each can be
+tested, swapped, or scaled independently. Stages 1–3 and 5 are the pricing
+core; stages 4 and 6 are the Friction-Aware Conversion Engine (§3):
 
 1. **IP enrichment** — the raw client IP becomes a trust signal
    (`ip_type`, `ip_trust_multiplier`, `location_confidence`). FireHOL
@@ -37,13 +38,28 @@ tested, swapped, or scaled independently:
    secondary LightGBM classifier predicts P(convert) as a function of the
    *offered* price multiplier — the list-price-vs-adjusted-price curve.
 
-4. **Pricing decision engine** — a **deterministic**, rules-only layer (no
+4. **Friction classifier** — a hybrid rule + LightGBM multiclass model that
+   names the *specific barrier to purchase* for this shopper (primary +
+   secondary of six: price sensitivity, trust deficit, decision paralysis,
+   payment friction, delivery anxiety, urgency-insensitive), with a confidence
+   score and plain-English drivers. Runs after WTP, before the price. See
+   §3 for the architecture and training.
+
+5. **Pricing decision engine** — a **deterministic**, rules-only layer (no
    model calls, no randomness) turns those numbers into a concrete checkout
    treatment: `final_price` (hard-capped at **+15 % / −10 %** of list),
    `offer_type` (premium-experience perks for high WTP, discount nudges for
    low WTP / weak conversion), a **personalised payment-method order**, COD
    and instant-refund eligibility, a plain-English `reasoning` string that
    cites the top-2 SHAP features, and a `confidence` grade.
+
+6. **Checkout assembly** — the friction call + the priced decision feed an
+   intervention library that emits a `checkout_config` object: which price
+   display (EMI / full / anchored), which 1–2 interventions, trust badges,
+   payment order, COD-split offer, delivery promise, social-proof counter,
+   urgency (gated to ≥3 min of session time), and the shopper-facing
+   "why this price / why this offer" copy. The Next.js checkout renders
+   **entirely** from this object — no widget is hard-coded. See §3.
 
 The API wraps these with CORS, request logging, a model warm-up on startup, and
 a hard latency ceiling: `POST /personalize` returns **503** if it exceeds
@@ -92,13 +108,16 @@ flowchart TD
         CTX[Market context\nfestival · RBI demand index]
         WTP[WTP Estimator\nLightGBM regressor + SHAP]
         CONV[Conversion classifier\nP(convert | offered price)]
+        FRIC[Friction classifier\nrules ⊕ LightGBM multiclass\nprimary + secondary + drivers]
         PE[Pricing Decision Engine\ncaps ±15/−10% · offer · payment order\nCOD / refund eligibility · reasoning]
-        RESP[PricingResponse\nprice · offer · SHAP · timing]
+        INTV[Intervention selector\nlibrary lookup · fatigue rotation\nmerchant allow-list]
+        ASM[Checkout assembly\ncheckout_config: price display · widgets\nurgency gate · why-this-price copy]
+        RESP[PricingResponse\nprice · offer · SHAP · friction · checkout_config]
     end
 
     subgraph Datastores
         RD[(Redis\nIP cache)]
-        PG[(PostgreSQL\npricing_decisions)]
+        PG[(PostgreSQL\npricing_decisions\nintervention_events · sessions)]
     end
 
     subgraph "Offline  (data-pipeline + model)"
@@ -108,21 +127,25 @@ flowchart TD
         FH[FireHOL blocklists]
         SYN[50k synthetic\ntransactions]
         TRAIN[LightGBM training\n+ SHAP + plots]
+        FTR[Friction training\nrule labels + 15% noise\ninverse-freq weights]
     end
 
     CO -->|customer signals + IP| RX
     RX --> IPE
     IPE <-->|get/set| RD
-    IPE --> CTX --> WTP --> CONV --> PE --> RESP
-    RESP -->|personalised price + offer| CO
-    RESP -->|async log: inputs, wtp, shap, price, latency| PG
+    IPE --> CTX --> WTP --> CONV --> FRIC --> PE --> INTV --> ASM --> RESP
+    RESP -->|dynamic checkout| CO
+    RESP -->|async log: inputs, wtp, shap, price, friction, checkout_config| PG
+    ASM -.->|intervention shown / settled outcome| PG
 
     RBI --> SYN
     GT --> SYN
     FES --> SYN
     SYN --> TRAIN
+    SYN --> FTR
     TRAIN -->|wtp_estimator.joblib\nconversion_classifier.joblib| WTP
     TRAIN --> CONV
+    FTR -->|friction_classifier.joblib| FRIC
     FES --> CTX
     RBI --> CTX
     FH --> IPE
@@ -130,7 +153,134 @@ flowchart TD
 
 ---
 
-## 3. Tech stack — one-line justifications
+## 3. Friction-Aware Conversion Engine
+
+The pricing core answers *what price*. This layer answers *why isn't this
+shopper converting, and what one change fixes it* — turning a pricing engine
+into a conversion-optimisation system. Four parts.
+
+### 3.1 Friction classifier  (`api/friction_engine.py`, `model/train_friction.py`)
+
+For every checkout it names a **primary** and **secondary** friction from six:
+
+| Friction | Signature |
+|---|---|
+| `price_sensitivity` | low WTP, Tier 3, COD-leaning, high returns, thin AOV |
+| `trust_deficit` | new account, VPN/DC network, low cross-merchant trust, few merchants |
+| `decision_paralysis` | abandons carts, late-night session, repeat visits, WTP on the fence |
+| `payment_friction` | COD-preferring but COD-ineligible, card-first shown to a UPI shopper, weak payment-success history |
+| `delivery_anxiety` | high returns, Tier 2/3, electronics / high-value, first buy in category |
+| `urgency_insensitive` | high WTP, repeat buyer, morning, Tier 1 — wants quality signals, not a countdown |
+
+**Hybrid, transparent-first.** A rule scorer assigns each friction a 0–1 score
+from the raw signals (documented coefficients a merchant can reason about — e.g.
+`price_sensitivity = 0.38·(1−wtp_norm) + 0.18·(tier==3) + 0.18·(return_rate/0.4) + …`).
+That vector is soft-maxed (temp 0.35) and **blended 50/50** with a LightGBM
+multiclass classifier's calibrated probabilities. If the model artifact is
+absent the engine degrades to pure rules. Confidence is
+`clamp01(0.45 + 0.9·(top − 2nd) + 0.25·(top − 1/6))` — a function of how far
+the winner leads.
+
+**Training methodology.** There is no labelled friction data, so
+`model/train_friction.py` labels all 50k synthetic transactions by the rule
+scorer's arg-max, **injects 15% uniform label noise** (so the model can't just
+re-learn the rules and instead picks up feature interactions), and adds
+**inverse-frequency sample weights** (clipped at 8×) so rare frictions aren't
+ignored. LightGBM `multiclass` / `num_class=6`, 900 rounds, `force_col_wise`.
+Reported: accuracy ≈ 0.80, macro-F1 ≈ 0.69, rule-agreement ≈ 0.93. Inference is
+numpy-only (row built in `model.feature_name()` order, categoricals via the
+frozen maps, three derived features) — **≈ 1 ms**, keeping `/personalize`
+≈ 40 ms warm.
+
+### 3.2 Intervention library  (`api/interventions.py`)
+
+Each friction has a **primary / secondary / tertiary** intervention. Every entry
+carries an `id` (logged), a `display_component` (which checkout widget renders
+it), the exact templated `copy`, the `psychological_mechanism` it exploits, and
+a synthetic `expected_conversion_lift` range anchored to published e-commerce
+research (Baymard cart-abandonment work, EMI/BNPL conversion studies,
+social-proof field experiments). Examples:
+
+| Friction | Primary | Mechanism |
+|---|---|---|
+| price_sensitivity | `emi_breakdown` | payment decoupling — a big number reframed as a small recurring one |
+| trust_deficit | `social_proof_counter` | social proof — others' behaviour as evidence under uncertainty |
+| decision_paralysis | `comparison_eliminator` | choice-overload relief — an external ranking ends the search |
+| payment_friction | `payment_reorder` | friction removal — preferred method first and pre-expanded |
+| delivery_anxiety | `delivery_promise` | uncertainty reduction — a firm date beats "3–5 business days" |
+| urgency_insensitive | `quality_signal` | confirmation — a high-WTP buyer wants reassurance, not a timer |
+
+Helpers compute the concrete artefacts: EMI schedule (0% shown), a
+category-anchored "market price" (`max(1.55·AOV, 1.24·final)` rounded),
+trust-scaled COD split (`upfront% = clamp(round((70−trust)/3), 10, 30)`), a
+specific delivery date by PIN tier, deterministic synthetic stock, a
+profile-keyed review snippet, and friction-relevant trust-badge selection.
+
+### 3.3 Checkout assembly  (`build_checkout_config`)
+
+Merges the friction call + `PricingDecision` into the `checkout_config` object
+the frontend renders from. Rules that matter:
+
+- **`price_display`** ∈ `full | emi | anchored`; a **markup is never anchored**
+  (no fake struck price over an above-list number).
+- **Urgency** is written only when `session_minutes ≥ 3` **and** synthetic stock
+  is genuinely low — `urgency_min_seconds = 180` is passed through and the
+  client re-checks against real session time, so it can never show on first load.
+- **Fatigue rotation** — `_pick` walks primary → secondary → tertiary, skipping
+  any `fatigued_intervention_ids`; the **merchant allow-list**
+  (`MerchantConfig.interventions`) filters the same way.
+- Social-proof counter is seeded from the live session count and marked
+  `social_proof_live` so the client ticks it via the `/ws/sessions` feed.
+
+### 3.4 A/B simulator, funnel, performance tracker
+
+- **`POST /simulate/ab_test`** (`api/ab_test.py`) — builds a synthetic cohort
+  around a segment, splits it 50/50, runs **control** (flat list price, no
+  intervention) vs **treatment** (WTP price + friction-aware intervention).
+  Conversion is a Bernoulli draw from the conversion classifier at each arm's
+  price; treatment additionally applies the primary intervention's published
+  relative uplift (secondary at 35% weight). Reports per-arm conversion / RPV,
+  the lift, a **pooled two-proportion z-test** p-value, and an **unpooled Wald
+  95% CI** on the conversion-rate lift. One vectorised `simulate_cohort` pass
+  (one feature build + three batched predicts) does a 2.5k cohort in ~2–3 s
+  instead of ~90 s; runs off the event loop.
+- **`GET /funnel`** (`api/funnel.py`) — four stages
+  `page_load → profile_submitted → payment_selected → order_confirmed`.
+  `order_confirmed` is the conversion classifier's probability; the two
+  intermediate stages use a transparent per-stage base retention adjusted by
+  the shopper's friction (× confidence), then **rescaled so the funnel product
+  equals the modelled conversion probability** — the shape is synthesised, the
+  endpoint is real. Drop-off at each step is attributed to friction type and to
+  the intervention that targets it. Mixes in a synthetic cohort while the live
+  log is small.
+- **`GET /interventions/performance`** (`api/intervention_perf.py`) — every
+  intervention *shown* is logged to `intervention_events` (outcome `NULL` until
+  the session hits complete/abandon, which stamps it). Aggregates conversion
+  rate + revenue-per-shown per intervention, lift vs the settled baseline,
+  common frictions per product category, and **fatigued `(segment, intervention)`
+  pairs** — 3+ shows, zero conversions — which `db.fatigued_interventions`
+  feeds back into `build_checkout_config` so the assembler rotates away.
+
+### 3.5 Friction-engine data flow
+
+```mermaid
+flowchart LR
+    S[customer signals] --> W[WTP estimator]
+    W --> C[conversion classifier]
+    W --> F[friction classifier\nrules ⊕ LGBM]
+    C --> D[pricing decision\n±caps · offer]
+    F --> I[intervention selector\nfatigue · allow-list]
+    D --> I
+    I --> A[checkout_config\nassembly]
+    A --> UI[dynamic checkout\nevery widget conditional]
+    A -.-> L[(intervention_events)]
+    UI -.->|complete / abandon| L
+    L -.->|fatigue set| I
+```
+
+---
+
+## 4. Tech stack — one-line justifications
 
 | Choice | Why |
 |---|---|
@@ -143,7 +293,7 @@ flowchart TD
 | **MaxMind GeoLite2 (`geoip2`)** | Industry-standard offline IP→ASN/geo; free tier; no per-request network call. |
 | **FireHOL blocklist-ipsets** | Community-maintained, frequently-updated VPN/DC/Tor/bogon ranges; loaded once into memory. |
 | **pytrends / RBI DBIE** | Ground the synthetic data in *real* Indian demand seasonality and payment-mix trends. |
-| **Next.js 14 + Tailwind + Recharts** | App-router routes for `/dashboard`, `/checkout/{id}`, `/merchant/{id}`; utility CSS for a polished demo quickly; Recharts for the metric charts, conversion curve, and SHAP waterfall. |
+| **Next.js 14 + Tailwind + Recharts** | App-router routes for `/dashboard`, `/checkout/{id}`, `/merchant/{id}`, `/merchant/dashboard` (conversion analytics: funnel, A/B, intervention performance); utility CSS for a polished demo quickly; Recharts for the metric charts, conversion curve, SHAP waterfall, and A/B bars. The customer checkout renders **entirely from `checkout_config`** — every widget conditional. |
 | **FastAPI WebSocket + `qrcode`** | `/ws/sessions` pushes session updates to the seller dashboard (no polling); `qrcode` renders the customer link as a scannable PNG for the phone demo. |
 | **Prophet + `arch` (GARCH) + `hmmlearn`** (Track 04) | Settlement forecasting needs trend/seasonality (Prophet), volatility clustering (GARCH), and discrete regime detection (HMM) — three complementary views. |
 | **Docker Compose** | One command brings up PG + Redis + seeder + API + dashboard with correct boot ordering and health gates. |
@@ -151,7 +301,7 @@ flowchart TD
 
 ---
 
-## 4. Latency budget
+## 5. Latency budget
 
 Target: **end-to-end `POST /personalize` < 200 ms**. Measured stage costs
 (local, warm, in-process cache):
@@ -162,9 +312,11 @@ Target: **end-to-end `POST /personalize` < 200 ms**. Measured stage costs
 | Market context lookup | 1 ms | **~0.02 ms** | in-memory dicts from pipeline CSVs |
 | WTP model inference + SHAP | 50 ms | **3–18 ms** | single-row LightGBM predict + `TreeExplainer` |
 | Conversion model (list + adjusted) | 30 ms | **2–30 ms** | two single-row predicts |
+| Friction classifier (rules ⊕ LGBM) | 10 ms | **~1 ms** | numpy-only row build + one multiclass predict |
 | Pricing decision engine | 10 ms | **< 0.1 ms** | pure Python arithmetic + string build |
-| DB log (async, off critical path) | 0 ms | **0 ms** | `await` after the response is assembled; best-effort |
-| **Total** | **< 200 ms** | **~35–65 ms warm** | first request after boot is pre-warmed in the lifespan hook |
+| Checkout assembly (`checkout_config`) | 5 ms | **< 0.5 ms** | library lookup + fatigue set (in-mem) or one GROUP BY |
+| DB log + intervention log (async, off path) | 0 ms | **0 ms** | `await` after the response is assembled; best-effort |
+| **Total** | **< 200 ms** | **~40–70 ms warm** | first request after boot is pre-warmed in the lifespan hook |
 
 Headroom is deliberate: it absorbs a cold Redis miss, a real MaxMind lookup, and
 network jitter between the merchant and the API while still clearing 200 ms. The
@@ -172,7 +324,7 @@ middleware returns **503** (not a stale price) if the ceiling is ever breached.
 
 ---
 
-## 5. Ethical framing — segmentation, not exploitation
+## 6. Ethical framing — segmentation, not exploitation
 
 **What this system does:** it prices to *observable segment characteristics*
 (device class, city tier, neighbourhood income tier, payment-method mix,
@@ -219,7 +371,7 @@ codebase and the cap constants are the first thing a reviewer should check
 
 ---
 
-## 6. Known limitations & what changes with real Razorpay data
+## 7. Known limitations & what changes with real Razorpay data
 
 | Limitation today | With real Razorpay transaction data |
 |---|---|
@@ -231,6 +383,8 @@ codebase and the cap constants are the first thing a reviewer should check
 | **Festival calendar and RBI demand index are static files.** | Live feeds; per-category, per-region demand nowcasting. |
 | **No holdout / guardrail monitoring in production.** | Always keep a control slice at list price to measure true lift and detect model drift; alert if realised margin or conversion drops. |
 | **Single-region, single-currency.** | Multi-currency, GST-inclusive display rules, state-level COD policies. |
+| **Friction labels are rule-derived, not observed.** The classifier is trained on its own rule scorer's arg-max (+15% noise), so it learns feature interactions around a hand-built prior, not real abandonment causes. `expected_conversion_lift` per intervention is a literature-anchored guess, not measured. | Label friction from real session telemetry (rage-clicks, field re-edits, payment retries, time-on-step) and outcomes; learn per-segment lift from the live `intervention_events` log instead of the library constant. |
+| **A/B simulator and funnel are synthetic.** The A/B cohort is generated, conversion is a Bernoulli draw from the (weak) conversion model plus the library uplift; the funnel's two middle stages are a retention model rescaled to the modelled conversion probability, not measured drop-off. | Both become read-only views over real experiment / clickstream data; the simulator keeps its value only as a pre-launch power/sizing tool. |
 
 ### On the statistics (what a sharp reviewer should poke at)
 
@@ -258,6 +412,21 @@ codebase and the cap constants are the first thing a reviewer should check
   output; the price shown is that value **clipped** to +15%/−10%. The merchant
   view shows both and labels the capped case, so the additive identity stays
   visibly exact.
+- **A/B simulator** (`/simulate/ab_test`) uses a **pooled** two-proportion
+  z-test for the p-value (correct null SE) and an **unpooled** Wald interval for
+  the 95% CI on the conversion-rate difference (correct under the alternative) —
+  `Φ` via `math.erf`, no SciPy. Arms are an independent 50/50 split of one
+  synthetic cohort, so the test's independence assumption holds; the reported
+  `expected_conversion_rate` is the pre-sampling analytic mean, separating the
+  signal from Monte-Carlo noise. It is **not** multiplicity-corrected and the
+  effect size is only as trustworthy as the conversion model + the library
+  uplift constants.
+- **Funnel** (`/funnel`) — only `order_confirmed` is a modelled probability. The
+  two intermediate stages are `base_retention + friction_delta·confidence`, then
+  the last leg is **rescaled** so `p₂·p₃·p₄ = P(convert)`; drop-off is *assigned*
+  to the shopper's named friction, not *inferred* from behaviour. Honest label:
+  a friction-attributed decomposition of the model's conversion number, not a
+  measured funnel.
 - **GARCH(1,1) multi-step** (Track 04) uses the textbook recursion
   `sigma^2_{t+h} = omega + (alpha+beta) sigma^2_{t+h-1}`, which mean-reverts to
   `omega/(1-alpha-beta)` on its own — no ad-hoc blending.
@@ -275,7 +444,7 @@ codebase and the cap constants are the first thing a reviewer should check
 
 ---
 
-## 7. What broke during development
+## 8. What broke during development
 
 <!-- Fill this in with the real war stories after the build. Seed notes: -->
 
@@ -321,3 +490,24 @@ codebase and the cap constants are the first thing a reviewer should check
   compose host-port mappings are now env-parameterised
   (`POSTGRES_HOST_PORT`, `DASHBOARD_HOST_PORT`, `API_HOST_PORT`,
   `REDIS_HOST_PORT`); container-internal ports are unchanged.
+- **Friction inference was 8.5 ms via pandas.** The first cut of
+  `FrictionModel._model_scores` built a one-row DataFrame + `S.encode` per call.
+  Rewrote it numpy-only (row assembled in `model.feature_name()` order,
+  categoricals through the frozen maps, 3 derived features) → **~1 ms**, and
+  `/personalize` back to ~40 ms warm.
+- **A/B simulator took 94 s for 3k shoppers.** It called `predict()` /
+  `conversion_proba()` per synthetic shopper — a pandas build + SHAP per row.
+  Added `WTPModel.simulate_cohort()`: one feature build + one encode for the
+  whole cohort, then three **batched** predicts (WTP, conv@list, conv@capped-
+  multiplier via a single column swap). 2.5k cohort now runs in ~2–3 s; the
+  funnel's synthetic fallback uses the same path.
+- **Friction archetypes tied at 0.50 confidence.** A COD-preferring Tier-3
+  shopper scored `price_sensitivity` and `payment_friction` neck-and-neck.
+  Retuned the rule weights (price_sensitivity's COD term 0.16 → 0.10,
+  payment_friction's `cod_pref_blocked` 0.42 → 0.58) and retrained — the
+  payment-friction archetype now wins cleanly.
+- **Friction category maps missed on `city_tier`.** Maps are keyed by strings
+  but the signal is an int, so every row got `-1` "unseen" for tier. Fixed with
+  `str(signals.get(f))` in the numpy row builder.
+- **`tsconfig.tsbuildinfo` got committed** by a stray `tsc --noEmit`. Added
+  `*.tsbuildinfo` to `dashboard/.gitignore` and untracked it.

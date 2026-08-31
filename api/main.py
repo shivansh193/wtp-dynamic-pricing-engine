@@ -7,6 +7,9 @@ POST /personalize            full pricing decision for one checkout
 GET  /metrics                aggregate analytics + revenue-lift simulation
 GET  /decision/{sid}         full decision log (incl. SHAP) for a session
 POST /simulate               decision + counterfactual sensitivity sweep
+POST /simulate/ab_test       synthetic control (flat) vs treatment (friction-aware)
+GET  /funnel                 4-stage conversion funnel, drop-off by friction type
+GET  /interventions/performance   conversion + RPV by intervention, fatigue
 POST /session/create         generate a demo customer link (+ QR)
 GET  /session/{sid}          session config + results if priced
 GET  /sessions/all           every generated session (seller dashboard table)
@@ -153,9 +156,10 @@ async def root() -> dict:
         "version": settings.VERSION,
         "track": "Razorpay AI Buildathon 2026 - Track 01",
         "endpoints": ["/personalize", "/metrics", "/decision/{session_id}",
-                      "/simulate", "/session/create", "/session/{id}",
-                      "/sessions/all", "/segment/stats/{key}", "/ws/sessions",
-                      "/enrich", "/health", "/docs"],
+                      "/simulate", "/simulate/ab_test", "/funnel",
+                      "/interventions/performance", "/session/create",
+                      "/session/{id}", "/sessions/all", "/segment/stats/{key}",
+                      "/ws/sessions", "/enrich", "/health", "/docs"],
         "public_base_url": settings.PUBLIC_BASE_URL,
     }
 
