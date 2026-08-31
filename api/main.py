@@ -255,7 +255,7 @@ async def decision_endpoint(session_id: str) -> dict:
         return str(v)
 
     # asyncpg returns jsonb columns as text; decode them back to objects
-    _JSON_COLS = {"input_signals", "shap_values", "payment_methods_shown"}
+    _JSON_COLS = {"input_signals", "shap_values", "payment_methods_shown", "checkout_config"}
 
     def _norm(r: dict) -> dict:
         d = dict(r)

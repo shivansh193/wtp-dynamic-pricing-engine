@@ -85,6 +85,8 @@ class Database:
                         wtp_score, conversion_probability, model_confidence, shap_values,
                         final_price, price_delta_pct, offer_type, payment_methods_shown,
                         cod_eligible, instant_refund_eligible, reasoning,
+                        friction_type, friction_secondary, friction_confidence,
+                        primary_intervention, secondary_intervention, checkout_config,
                         latency_ms, budget_exceeded
                     ) VALUES (
                         $1, $2::jsonb, $3::inet, $4,
@@ -92,7 +94,9 @@ class Database:
                         $8, $9, $10, $11::jsonb,
                         $12, $13, $14, $15::jsonb,
                         $16, $17, $18,
-                        $19, $20
+                        $19, $20, $21,
+                        $22, $23, $24::jsonb,
+                        $25, $26
                     ) RETURNING id
                     """,
                     record["session_id"],
@@ -113,6 +117,12 @@ class Database:
                     record.get("cod_eligible"),
                     record.get("instant_refund_eligible"),
                     record.get("reasoning"),
+                    record.get("friction_type"),
+                    record.get("friction_secondary"),
+                    record.get("friction_confidence"),
+                    record.get("primary_intervention"),
+                    record.get("secondary_intervention"),
+                    json.dumps(record.get("checkout_config")),
                     record["latency_ms"],
                     record.get("budget_exceeded", False),
                 )
@@ -131,6 +141,11 @@ class Database:
                 session_id,
             )
         return [dict(r) for r in rows]
+
+    async def fatigued_interventions(self, session_id: str) -> set:
+        """Intervention ids this session has been shown 3+ times without a
+        conversion. Populated by the intervention log (Step 6); empty until then."""
+        return set()
 
     async def fetch_all(self, limit: int = 50_000) -> list[dict]:
         if self._pool is None:

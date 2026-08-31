@@ -71,6 +71,16 @@ class MerchantConfig:
 
     offers: OfferToggles = field(default_factory=OfferToggles)
     trust_weights: TrustWeights = field(default_factory=TrustWeights)
+    # friction-engine intervention allow-map (id -> enabled). Empty = all on.
+    interventions: dict[str, bool] = field(default_factory=dict)
+
+    def intervention_allowed(self, iid: str) -> bool:
+        return self.interventions.get(iid, True)
+
+    def allowed_intervention_ids(self) -> set[str]:
+        from .interventions import ALL_INTERVENTION_IDS
+
+        return {i for i in ALL_INTERVENTION_IDS if self.intervention_allowed(i)}
 
     # ------------------------------------------------------------------ #
     def effective_caps(self) -> tuple[float, float]:
@@ -87,10 +97,14 @@ class MerchantConfig:
         patch = dict(patch or {})
         offers = patch.pop("offers", None)
         weights = patch.pop("trust_weights", None)
+        ivs = patch.pop("interventions", None)
         allowed = {f for f in self.__dataclass_fields__ if f not in
-                   ("offers", "trust_weights")}
+                   ("offers", "trust_weights", "interventions")}
         clean = {k: v for k, v in patch.items() if k in allowed}
         new = replace(self, **clean)
+        if isinstance(ivs, dict):
+            new.interventions = {**self.interventions,
+                                 **{k: bool(v) for k, v in ivs.items()}}
         if isinstance(offers, dict):
             new.offers = replace(new.offers,
                                  **{k: bool(v) for k, v in offers.items()

@@ -34,10 +34,28 @@ CREATE TABLE IF NOT EXISTS pricing_decisions (
     instant_refund_eligible  BOOLEAN,
     reasoning                TEXT,
 
+    -- friction-aware conversion engine
+    friction_type            TEXT,
+    friction_secondary       TEXT,
+    friction_confidence      NUMERIC(6,4),
+    primary_intervention     TEXT,
+    secondary_intervention   TEXT,
+    checkout_config          JSONB,
+
     -- ops
     latency_ms               NUMERIC(8,3)  NOT NULL,
     budget_exceeded          BOOLEAN       NOT NULL DEFAULT false
 );
+CREATE INDEX IF NOT EXISTS ix_pricing_decisions_friction ON pricing_decisions (friction_type);
+CREATE INDEX IF NOT EXISTS ix_pricing_decisions_interv   ON pricing_decisions (primary_intervention);
+
+-- Backfill for an already-created table (idempotent).
+ALTER TABLE pricing_decisions ADD COLUMN IF NOT EXISTS friction_type          TEXT;
+ALTER TABLE pricing_decisions ADD COLUMN IF NOT EXISTS friction_secondary     TEXT;
+ALTER TABLE pricing_decisions ADD COLUMN IF NOT EXISTS friction_confidence    NUMERIC(6,4);
+ALTER TABLE pricing_decisions ADD COLUMN IF NOT EXISTS primary_intervention   TEXT;
+ALTER TABLE pricing_decisions ADD COLUMN IF NOT EXISTS secondary_intervention TEXT;
+ALTER TABLE pricing_decisions ADD COLUMN IF NOT EXISTS checkout_config        JSONB;
 
 CREATE INDEX IF NOT EXISTS ix_pricing_decisions_session   ON pricing_decisions (session_id);
 CREATE INDEX IF NOT EXISTS ix_pricing_decisions_created   ON pricing_decisions (created_at DESC);

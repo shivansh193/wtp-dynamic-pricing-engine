@@ -24,6 +24,7 @@ from .logging_util import log
 from .pricing_engine import decide
 from .schemas import (
     CustomerSignals,
+    FrictionBrief,
     IpEnrichmentBrief,
     PricingResponse,
     ShapFeature,
@@ -115,9 +116,20 @@ async def personalize(payload: CustomerSignals) -> tuple[PricingResponse, dict]:
     conv_list = model.conversion_proba(signals, 1.0)
     conv_ms = round((time.perf_counter() - t0) * 1000, 3)
 
-    # ---- 5. deterministic pricing engine (respects merchant config) ----
+    # ---- 5. friction classifier (after WTP, before the pricing decision) ----
+    from .friction_engine import FrictionContext, classify_friction
+    from .interventions import build_checkout_config
     from .merchant_config import get_config
 
+    mc = get_config()
+    t0 = time.perf_counter()
+    fctx = await _friction_context(session_id, signals, trust=signals.get(
+        "cross_merchant_trust_score", 55), cod_completion=signals.get(
+        "cod_completion_rate", 0.85))
+    friction = classify_friction(signals, wtp_multiplier=wtp, context=fctx)
+    friction_ms = round((time.perf_counter() - t0) * 1000, 3)
+
+    # ---- 6. deterministic pricing engine (respects merchant config) ----
     decision = decide(
         list_price=payload.list_price,
         wtp_multiplier=wtp,
@@ -125,8 +137,19 @@ async def personalize(payload: CustomerSignals) -> tuple[PricingResponse, dict]:
         customer_signals=signals,
         shap_top=pred["shap_top"],
         model_confidence=pred["confidence"],
-        merchant_config=get_config(),
+        merchant_config=mc,
         force_list_price=bool(getattr(payload, "force_list_price", False)),
+    )
+
+    # ---- 7. dynamic checkout config from the detected friction ----
+    fatigued = await _fatigued_interventions(session_id)
+    checkout_config = build_checkout_config(
+        friction, signals, decision,
+        session_id=session_id,
+        session_minutes=float(getattr(payload, "session_minutes", 0.0) or 0.0),
+        base_session_count=await _session_count(),
+        fatigued_intervention_ids=fatigued,
+        allowed_ids=mc.allowed_intervention_ids(),
     )
 
     total_ms = round((time.perf_counter() - t_start) * 1000, 3)
@@ -135,6 +158,7 @@ async def personalize(payload: CustomerSignals) -> tuple[PricingResponse, dict]:
         "market_context_ms": ctx_ms,
         "wtp_model_ms": model_ms,
         "conversion_model_ms": conv_ms,
+        "friction_ms": friction_ms,
         "pricing_engine_ms": decision.latency_ms,
         "total_ms": total_ms,
     }
@@ -165,6 +189,15 @@ async def personalize(payload: CustomerSignals) -> tuple[PricingResponse, dict]:
         is_markup=decision.is_markup,
         standard_price=decision.standard_price,
         net_vs_standard_inr=decision.net_vs_standard_inr,
+        friction=FrictionBrief(
+            primary=friction.primary,
+            secondary=friction.secondary,
+            confidence=friction.confidence,
+            scores=friction.scores,
+            drivers=friction.drivers,
+            engine=friction.engine,
+        ),
+        checkout_config=checkout_config,
     )
 
     db_record = {
@@ -194,8 +227,62 @@ async def personalize(payload: CustomerSignals) -> tuple[PricingResponse, dict]:
         "reasoning": decision.reasoning,
         "latency_ms": total_ms,
         "budget_exceeded": False,
+        "friction_type": friction.primary,
+        "friction_secondary": friction.secondary,
+        "friction_confidence": round(friction.confidence, 4),
+        "primary_intervention": checkout_config.get("primary_intervention"),
+        "secondary_intervention": checkout_config.get("secondary_intervention"),
+        "checkout_config": _jsonable(checkout_config),
     }
     return response, db_record
+
+
+# --------------------------------------------------------------------------- #
+# Friction context helpers (session-history proxies)
+# --------------------------------------------------------------------------- #
+async def _all_sessions_safe() -> list[dict]:
+    try:
+        from .sessions import session_store
+
+        return await session_store.all(limit=500)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+async def _session_count() -> int:
+    return len(await _all_sessions_safe())
+
+
+async def _friction_context(session_id: str, signals: dict, *, trust, cod_completion):
+    from .friction_engine import FrictionContext
+
+    rows = await _all_sessions_safe()
+    seg = "|".join(str(signals.get(k, "?")) for k in
+                   ("city_tier", "device_type", "payment_method_preference"))
+    like = [r for r in rows if (r.get("segment_key") == seg)]
+    abandoned = sum(1 for r in like if r.get("status") == "abandoned")
+    repeats = max(0, len(like) - 1)
+    abandonment_rate = (abandoned / len(like)) if like else 0.0
+    n_merch = int(signals.get("num_merchants_transacted", 5) or 5)
+    cat = signals.get("product_category", "fashion")
+    return FrictionContext(
+        cart_abandonment_rate=round(min(1.0, abandonment_rate + 0.15 * (
+            1 - float(signals.get("payment_success_rate", 0.9) or 0.9))), 4),
+        repeat_sessions_on_product=repeats,
+        first_purchase_in_category=bool(n_merch <= 2 and cat in {"electronics", "home"}),
+        session_minutes=0.0,
+        cod_eligible=bool(float(trust or 55) > 55 and float(cod_completion or 0.85) > 0.8),
+    )
+
+
+async def _fatigued_interventions(session_id: str) -> set[str]:
+    """Intervention ids this session has already seen 3+ times without converting."""
+    try:
+        from .db import db
+
+        return await db.fatigued_interventions(session_id)
+    except Exception:  # noqa: BLE001
+        return set()
 
 
 async def simulate(profile: CustomerSignals,

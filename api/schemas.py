@@ -74,6 +74,15 @@ class ShapFeature(BaseModel):
     shap: float
 
 
+class FrictionBrief(BaseModel):
+    primary: str = "urgency_insensitive"
+    secondary: str = "price_sensitivity"
+    confidence: float = 0.0
+    scores: dict[str, float] = Field(default_factory=dict)
+    drivers: list[dict[str, Any]] = Field(default_factory=list)
+    engine: str = "rules"
+
+
 class IpEnrichmentBrief(BaseModel):
     ip_type: str = "unknown"
     ip_trust_multiplier: float = 0.8
@@ -112,6 +121,9 @@ class PricingResponse(BaseModel):
     is_markup: bool = False
     standard_price: float = 0.0
     net_vs_standard_inr: float = 0.0
+    # friction-aware conversion engine
+    friction: FrictionBrief = Field(default_factory=lambda: FrictionBrief())
+    checkout_config: dict[str, Any] = Field(default_factory=dict)
 
 
 class SimulateRequest(BaseModel):

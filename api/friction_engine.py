@@ -253,23 +253,31 @@ class FrictionModel:
             return None
         try:
             import numpy as np
-            import pandas as pd
 
             b = self._bundle
-            feats = b["features"]
-            row = {f: signals.get(f) for f in feats}
-            row["wtp_multiplier"] = wtp_multiplier
-            row["wtp_norm"] = _wtp_norm(wtp_multiplier)
-            row["is_new_account"] = 1 if float(signals.get("account_age_days", 200) or 200) < 90 else 0
-            df = pd.DataFrame([row])[b["model"].feature_name()]
-            for c in b.get("categorical_features", []):
-                if c in df.columns:
-                    m = b["category_maps"].get(c, {})
-                    df[c] = df[c].map(m).fillna(-1).astype("int64")
-            df = df.apply(pd.to_numeric, errors="coerce")
-            proba = b["model"].predict(df)[0]
-            classes = b["classes"]
-            return {c: float(p) for c, p in zip(classes, proba)}
+            cat_maps = b["category_maps"]
+            cats = set(b.get("categorical_features", []))
+            order = b["model"].feature_name()
+            derived = {
+                "wtp_multiplier": float(wtp_multiplier),
+                "wtp_norm": _wtp_norm(wtp_multiplier),
+                "is_new_account": 1.0 if float(signals.get("account_age_days", 200) or 200) < 90 else 0.0,
+            }
+            row = []
+            for f in order:
+                if f in derived:
+                    row.append(derived[f])
+                elif f in cats:
+                    row.append(float(cat_maps.get(f, {}).get(str(signals.get(f)), -1)))
+                else:
+                    v = signals.get(f)
+                    try:
+                        row.append(float(v))
+                    except (TypeError, ValueError):
+                        row.append(float("nan"))
+            proba = b["model"].predict(np.array([row], dtype="float64"),
+                                       num_iteration=b["model"].best_iteration)[0]
+            return {c: float(p) for c, p in zip(b["classes"], proba)}
         except Exception as exc:  # noqa: BLE001
             print(f"[friction] model inference failed: {exc!r}")
             return None
