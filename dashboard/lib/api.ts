@@ -1,4 +1,5 @@
 import type {
+  AbTestResult,
   CustomSessionFields,
   CustomerSignals,
   MerchantConfig,
@@ -65,6 +66,17 @@ export function simulate(profile: Partial<CustomerSignals> & { list_price: numbe
 
 export function getMetrics() {
   return jsonFetch<MetricsResponse>("/metrics");
+}
+
+export function runAbTest(body: {
+  segment: Record<string, unknown>;
+  sample_size?: number;
+  seed?: number;
+}) {
+  return jsonFetch<AbTestResult>("/simulate/ab_test", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 export function getHealth() {

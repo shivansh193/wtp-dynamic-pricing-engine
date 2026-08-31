@@ -44,6 +44,7 @@ from .logging_util import log
 from .metrics import compute_metrics
 from .qr import make_qr_data_uri
 from .schemas import (
+    ABTestRequest,
     CustomerSignals,
     PricingResponse,
     SessionCreateRequest,
@@ -284,6 +285,20 @@ async def simulate_endpoint(req: SimulateRequest) -> SimulateResponse:
     base.budget_ms = settings.LATENCY_BUDGET_MS
     base.budget_exceeded = base.latency_ms > settings.LATENCY_BUDGET_MS
     return SimulateResponse(base=base, sensitivity=sensitivity)
+
+
+@app.post("/simulate/ab_test")
+async def ab_test_endpoint(req: ABTestRequest) -> dict:
+    """Synthetic control (flat) vs treatment (friction-aware) experiment for a
+    segment. Runs off the request thread so a large cohort doesn't block the
+    event loop."""
+    import anyio
+
+    from .ab_test import simulate_ab_test
+
+    return await anyio.to_thread.run_sync(
+        lambda: simulate_ab_test(req.segment, req.sample_size, seed=req.seed)
+    )
 
 
 # --------------------------------------------------------------------------- #

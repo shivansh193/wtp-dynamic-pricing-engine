@@ -114,6 +114,58 @@ class WTPModel:
             }
 
     # ------------------------------------------------------------------ #
+    def wtp_only(self, raw: dict) -> float:
+        """WTP multiplier with no SHAP - for bulk simulation (~0.5ms/row vs
+        ~3ms for the full predict()). Never raises: returns 1.0 on failure."""
+        try:
+            X, _ = self._encode(raw)
+            wtp = float(self._wtp_model.predict(X, num_iteration=self._best_it)[0])
+            return max(0.85, min(1.25, wtp))
+        except Exception:  # noqa: BLE001
+            return 1.0
+
+    # ------------------------------------------------------------------ #
+    def simulate_cohort(self, raws: list[dict], *,
+                        cap_up: float = 0.15, cap_down: float = -0.10) -> dict:
+        """Vectorised bulk path for the A/B simulator.
+
+        One feature build + one encode for the whole cohort, then three batched
+        LightGBM predicts: WTP, conversion at list price (mult=1.0), and
+        conversion at each row's capped WTP multiplier. ~1000x cheaper than
+        looping predict()/conversion_proba() per shopper.
+
+        Returns numpy arrays: wtp, eff (capped multiplier), conv_list, conv_eff
+        (conv_* are None if the conversion classifier artifact is absent).
+        """
+        df = pd.concat([S.build_features(r) for r in raws], ignore_index=True)
+        enc = S.encode(df, self._cat_maps)
+        for c in self._features:
+            if c not in enc.columns:
+                enc[c] = 0.0
+        wtp = np.clip(
+            self._wtp_model.predict(enc[self._features], num_iteration=self._best_it),
+            0.85, 1.25,
+        )
+        eff = np.clip(wtp, 1.0 + cap_down, 1.0 + cap_up)
+
+        conv_list = conv_eff = None
+        if self._conv is not None:
+            pf = self._conv["price_feature"]
+            cols = list(self._conv["features"])
+            Xc = enc.copy()
+            for c in cols:
+                if c not in Xc.columns and c != pf:
+                    Xc[c] = 0.0
+            Xc[pf] = 1.0
+            Xc = Xc[cols]
+            cm, cit = self._conv["model"], self._conv.get("best_iteration")
+            conv_list = np.clip(cm.predict(Xc, num_iteration=cit), 1e-3, 1 - 1e-3)
+            Xc[pf] = eff
+            conv_eff = np.clip(cm.predict(Xc, num_iteration=cit), 1e-3, 1 - 1e-3)
+
+        return {"wtp": wtp, "eff": eff, "conv_list": conv_list, "conv_eff": conv_eff}
+
+    # ------------------------------------------------------------------ #
     def conversion_proba(self, raw: dict, price_multiplier: float) -> float | None:
         if self._conv is None:
             return None

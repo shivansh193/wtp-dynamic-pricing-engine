@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useState } from "react";
 import { LinkGenerator } from "@/components/LinkGenerator";
 import { MerchantSettings } from "@/components/MerchantSettings";
@@ -30,10 +31,15 @@ export default function DashboardPage() {
     <div className="space-y-7">
       <div className="flex items-baseline justify-between">
         <h1 className="text-base font-semibold text-ink">Seller dashboard</h1>
-        <p className="text-xs text-zinc-400">
-          RunHub Official Store · demo product: {""}
-          <span className="text-zinc-500">Nike Air Max</span>
-        </p>
+        <div className="flex items-center gap-3 text-xs text-zinc-400">
+          <Link href="/merchant/dashboard" className="text-brand hover:underline">
+            Conversion analytics →
+          </Link>
+          <span>
+            RunHub Official Store ·{" "}
+            <span className="text-zinc-500">Nike Air Max</span>
+          </span>
+        </div>
       </div>
 
       <section>

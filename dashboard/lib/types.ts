@@ -243,3 +243,59 @@ export interface WsMessage {
   ts?: string;
   backend?: string;
 }
+
+// ---- A/B test simulator (friction-aware conversion engine) ----
+export interface AbArm {
+  label: string;
+  n: number;
+  conversions: number;
+  conversion_rate: number;
+  expected_conversion_rate: number;
+  revenue: number;
+  rpv: number;
+  avg_price: number;
+  markup_share?: number;
+}
+
+export interface AbTestResult {
+  segment: {
+    city_tier: number;
+    device_type: string;
+    product_category: string;
+    list_price: number;
+    payment_split_center: Record<string, number>;
+    prepaid_orders_mean: number;
+    return_rate_mean: number;
+    vpn_rate: number;
+  };
+  sample_size: number;
+  seed: number;
+  arms: { control: AbArm; treatment: AbArm };
+  lift: {
+    conversion_rate_abs: number;
+    conversion_rate_rel_pct: number;
+    rpv_abs: number;
+    rpv_rel_pct: number;
+  };
+  significance: {
+    z_stat: number;
+    p_value: number;
+    significant: boolean;
+    ci95_low: number;
+    ci95_high: number;
+    ci95_conversion_lift: [number, number];
+    method: string;
+  };
+  top_intervention: {
+    id: string;
+    times_served: number;
+    share_of_treatment: number;
+    display_component?: string;
+    expected_conversion_lift?: string;
+    psychological_mechanism?: string;
+  } | null;
+  intervention_mix: { id: string; times_served: number; share: number }[];
+  friction_mix: { type: string; count: number; share: number }[];
+  elapsed_ms: number;
+  note: string;
+}

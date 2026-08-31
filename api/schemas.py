@@ -126,6 +126,19 @@ class PricingResponse(BaseModel):
     checkout_config: dict[str, Any] = Field(default_factory=dict)
 
 
+class ABTestRequest(BaseModel):
+    """Segment definition + cohort size for POST /simulate/ab_test.
+
+    `segment` is a loose dict (all keys optional): city_tier, device_type,
+    payment_split / payment_method_preference, product_category, list_price,
+    prepaid_orders (mean), prepaid_orders_sd, return_rate (mean),
+    return_rate_sd, vpn_rate, pin_code.
+    """
+    segment: dict[str, Any] = Field(default_factory=dict)
+    sample_size: int = Field(2500, ge=200, le=20000)
+    seed: Optional[int] = None
+
+
 class SimulateRequest(BaseModel):
     profile: CustomerSignals
     counterfactuals: Optional[dict[str, list[Any]]] = Field(
