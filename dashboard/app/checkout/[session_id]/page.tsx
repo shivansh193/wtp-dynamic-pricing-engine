@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { CheckoutForm } from "@/components/CheckoutForm";
-import { PriceReveal } from "@/components/PriceReveal";
+import { DynamicCheckout } from "@/components/DynamicCheckout";
 import { getSession, personalize } from "@/lib/api";
 import { PRESET_LABELS, signalsFromConfig } from "@/lib/profiles";
 import type { PricingResponse, Preset, SessionConfig, SessionInfo } from "@/lib/types";
@@ -121,10 +121,11 @@ export default function CheckoutPage({
         )}
 
         {phase === "reveal" && result && session && (
-          <PriceReveal
+          <DynamicCheckout
             result={result}
             sessionId={sessionId}
             config={session.config}
+            sessionCreatedAt={session.created_at}
             onResult={setResult}
           />
         )}

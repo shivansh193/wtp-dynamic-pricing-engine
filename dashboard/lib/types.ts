@@ -38,6 +38,52 @@ export interface ShapFeature {
   shap: number;
 }
 
+export interface FrictionDriver {
+  signal: string;
+  weight: number;
+}
+
+export interface FrictionBrief {
+  primary: string;
+  secondary: string;
+  confidence: number;
+  scores: Record<string, number>;
+  drivers: FrictionDriver[];
+  engine: string;
+}
+
+export interface CheckoutConfig {
+  friction_type: string;
+  friction_secondary: string;
+  friction_confidence: number;
+  friction_drivers: FrictionDriver[];
+  primary_intervention: string;
+  secondary_intervention: string;
+  psychological_mechanism: string;
+  price_display: "full" | "emi" | "anchored";
+  final_price: number;
+  list_price: number;
+  is_markup: boolean;
+  emi_amount: number | null;
+  emi_months: number | null;
+  anchor_price: number | null;
+  trust_badges: string[];
+  payment_method_order: string[];
+  cod_split_offer: { upfront_pct: number; on_delivery_pct: number } | null;
+  urgency_message: string | null;
+  urgency_min_seconds: number;
+  delivery_promise: string | null;
+  social_proof_count: number | null;
+  social_proof_live: boolean;
+  review_snippet: string | null;
+  price_lock_expiry: string | null;
+  quality_signal: string | null;
+  premium_note: string | null;
+  exclusivity_note: string | null;
+  expected_conversion_lift: string;
+  offer_headline: string;
+}
+
 export interface IpEnrichmentBrief {
   ip_type: string;
   ip_trust_multiplier: number;
@@ -75,6 +121,8 @@ export interface PricingResponse {
   is_markup: boolean;
   standard_price: number;
   net_vs_standard_inr: number;
+  friction?: FrictionBrief;
+  checkout_config?: CheckoutConfig;
 }
 
 export interface MetricsResponse {

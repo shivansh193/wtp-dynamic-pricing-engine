@@ -22,6 +22,22 @@ function ago(iso?: string): string {
   return `${Math.floor(s / 3600)}h`;
 }
 
+const FRICTION_SHORT: Record<string, string> = {
+  price_sensitivity: "price-sensitive",
+  trust_deficit: "trust deficit",
+  decision_paralysis: "paralysis",
+  payment_friction: "payment friction",
+  delivery_anxiety: "delivery anxiety",
+  urgency_insensitive: "urgency-insensitive",
+};
+
+function outcome(status: string): { label: string; cls: string } {
+  if (status === "converted") return { label: "converted ✓", cls: "text-emerald-700" };
+  if (status === "abandoned") return { label: "abandoned ✗", cls: "text-amber-700" };
+  if (status === "priced") return { label: "in progress", cls: "text-zinc-400" };
+  return { label: "—", cls: "text-zinc-300" };
+}
+
 export function SessionTable({ refreshSignal }: { refreshSignal?: number }) {
   const [seed, setSeed] = useState<SessionInfo[]>([]);
   const [backend, setBackend] = useState<string>("");
@@ -64,6 +80,9 @@ export function SessionTable({ refreshSignal }: { refreshSignal?: number }) {
               <th className="px-4 py-2 font-medium">Session</th>
               <th className="px-4 py-2 font-medium">Profile</th>
               <th className="px-4 py-2 font-medium">Status</th>
+              <th className="px-4 py-2 font-medium">Friction · fix</th>
+              <th className="px-4 py-2 text-right font-medium">Exp. lift</th>
+              <th className="px-4 py-2 font-medium">Outcome</th>
               <th className="px-4 py-2 text-right font-medium">WTP</th>
               <th className="px-4 py-2 text-right font-medium">Price</th>
               <th className="px-4 py-2 text-right font-medium">Age</th>
@@ -73,7 +92,7 @@ export function SessionTable({ refreshSignal }: { refreshSignal?: number }) {
           <tbody>
             {sessions.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-6 text-center text-zinc-400">
+                <td colSpan={10} className="px-4 py-6 text-center text-zinc-400">
                   No sessions yet.
                 </td>
               </tr>
@@ -99,6 +118,29 @@ export function SessionTable({ refreshSignal }: { refreshSignal?: number }) {
                   >
                     {s.status}
                   </span>
+                </td>
+                <td className="px-4 py-1.5">
+                  {s.result?.checkout_config ? (
+                    <span className="text-zinc-600">
+                      {FRICTION_SHORT[s.result.checkout_config.friction_type] ??
+                        s.result.checkout_config.friction_type}
+                      <span className="ml-1 text-zinc-400">
+                        →{" "}
+                        {s.result.checkout_config.primary_intervention.replace(
+                          /_/g,
+                          " ",
+                        )}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="text-zinc-300">—</span>
+                  )}
+                </td>
+                <td className="px-4 py-1.5 text-right tabular-nums text-zinc-500">
+                  {s.result?.checkout_config?.expected_conversion_lift ?? "—"}
+                </td>
+                <td className={`px-4 py-1.5 text-[11px] ${outcome(s.status).cls}`}>
+                  {outcome(s.status).label}
                 </td>
                 <td className="px-4 py-1.5 text-right tabular-nums text-zinc-600">
                   {s.wtp_score != null ? `×${s.wtp_score.toFixed(3)}` : "—"}
