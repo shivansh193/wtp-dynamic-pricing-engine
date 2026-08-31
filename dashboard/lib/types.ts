@@ -299,3 +299,37 @@ export interface AbTestResult {
   elapsed_ms: number;
   note: string;
 }
+
+// ---- conversion funnel (friction-aware conversion engine) ----
+export interface FunnelShare {
+  key: string;
+  count: number;
+  share: number;
+}
+
+export interface FunnelStage {
+  stage: string;
+  label: string;
+  reached: number;
+  reached_pct: number;
+  dropoff?: number;
+  dropoff_pct_of_prev?: number;
+  dropoff_by_friction?: FunnelShare[];
+  top_interventions?: FunnelShare[];
+  explainer?: string;
+}
+
+export interface FunnelResult {
+  stages: FunnelStage[];
+  n: number;
+  data_source: string;
+  overall_conversion: number;
+  biggest_leak: {
+    stage: string;
+    label: string;
+    dropoff_pct_of_prev: number;
+    leading_friction: string | null;
+    leading_friction_share: number | null;
+  } | null;
+  note: string;
+}

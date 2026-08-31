@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { ABTestPanel } from "@/components/ABTestPanel";
+import { ConversionFunnel } from "@/components/ConversionFunnel";
 
 function Label({ children }: { children: React.ReactNode }) {
   return (
@@ -22,6 +23,11 @@ export default function MerchantDashboardPage() {
           ← Seller dashboard
         </Link>
       </div>
+
+      <section>
+        <Label>Conversion funnel</Label>
+        <ConversionFunnel />
+      </section>
 
       <section>
         <Label>Friction-aware A/B test</Label>

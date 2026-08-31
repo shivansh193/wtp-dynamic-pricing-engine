@@ -1,5 +1,6 @@
 import type {
   AbTestResult,
+  FunnelResult,
   CustomSessionFields,
   CustomerSignals,
   MerchantConfig,
@@ -77,6 +78,10 @@ export function runAbTest(body: {
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+export function getFunnel() {
+  return jsonFetch<FunnelResult>("/funnel");
 }
 
 export function getHealth() {

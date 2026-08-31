@@ -287,6 +287,18 @@ async def simulate_endpoint(req: SimulateRequest) -> SimulateResponse:
     return SimulateResponse(base=base, sensitivity=sensitivity)
 
 
+@app.get("/funnel")
+async def funnel_endpoint() -> dict:
+    """Four-stage checkout funnel with friction-attributed drop-off, built from
+    the decision log (synthetic cohort mixed in while the log is small)."""
+    import anyio
+
+    from .funnel import compute_funnel
+
+    rows = await db.fetch_all()
+    return await anyio.to_thread.run_sync(lambda: compute_funnel(rows))
+
+
 @app.post("/simulate/ab_test")
 async def ab_test_endpoint(req: ABTestRequest) -> dict:
     """Synthetic control (flat) vs treatment (friction-aware) experiment for a
