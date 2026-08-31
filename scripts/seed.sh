@@ -41,9 +41,9 @@ fi
 
 echo "[seed] === 2/2  model training  (threads=$OMP_NUM_THREADS, fast=$TRAIN_FAST) ==="
 if [[ "$TRAIN_FAST" == "1" ]]; then
-  python -m model.train --fast
+  python -m model.train --fast && python -m model.train_friction --fast
 else
-  python -m model.train
+  python -m model.train && python -m model.train_friction
 fi
 
 date -u +"%Y-%m-%dT%H:%M:%SZ" > "$MARKER"

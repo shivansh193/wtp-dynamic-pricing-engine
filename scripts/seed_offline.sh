@@ -23,8 +23,8 @@ fi
 
 echo "[seed_offline] training (fast)"
 if [[ "${TRAIN_FAST:-1}" == "1" ]]; then
-  python -m model.train --fast
+  python -m model.train --fast && python -m model.train_friction --fast
 else
-  python -m model.train
+  python -m model.train && python -m model.train_friction
 fi
 echo "[seed_offline] done"
