@@ -43,12 +43,12 @@ beautifulsoup4==4.12.3
 lxml==5.2.2
 openpyxl==3.1.4
 
-# ---- Cash Flow Oracle (Track 04) - LLM recommendation ----
-# GARCH/HMM/Prophet run on their documented statistical fallbacks here; only the
-# Anthropic client is needed for /oracle/llm_recommendation (falls back to a
-# template if ANTHROPIC_API_KEY is unset). Full model stack is in
-# cash-flow-oracle/requirements.txt.
-anthropic==0.34.2
+# ---- Cash Flow Oracle (Track 04) ----
+# GARCH/HMM/Prophet run on their documented statistical fallbacks here (full
+# model stack is in cash-flow-oracle/requirements.txt). /oracle/llm_recommendation
+# calls Google Gemini via the generativelanguage REST API using httpx (already a
+# dependency) - no LLM SDK - and falls back to a template if GEMINI_API_KEY is
+# unset or the call fails.
 
 # ---- Dev / test ----
 pytest==8.2.2

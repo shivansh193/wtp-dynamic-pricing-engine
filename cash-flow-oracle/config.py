@@ -58,10 +58,10 @@ CAPITAL_BORROW_COST_PCT_PER_MONTH = 1.5
 ANOMALY_SIGMA_FORECAST_FLAG = 2.0   # POST /oracle/forecast anomaly_flag
 ANOMALY_SIGMA_FEED = 1.5           # GET  /oracle/anomalies/{id} feed
 
-# LLM recommendation
-LLM_MODEL = os.getenv("CFO_LLM_MODEL", "claude-sonnet-4-6")
+# LLM recommendation (Google Gemini via the generativelanguage REST API)
+LLM_MODEL = os.getenv("CFO_LLM_MODEL", "gemini-2.5-flash")
 LLM_CACHE_TTL_HOURS = 6
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
 
 # archetype -> (daily base settlement INR, day-to-day noise sigma (lognormal),
 #               festive spike gain, monsoon dip, march FY-end gain,

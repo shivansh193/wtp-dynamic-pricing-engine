@@ -298,7 +298,7 @@ flowchart LR
 | **Next.js 14 + Tailwind + Recharts** | App-router routes for `/dashboard`, `/checkout/{id}`, `/merchant/{id}`, `/merchant/dashboard` (conversion analytics: funnel, A/B, intervention performance); utility CSS for a polished demo quickly; Recharts for the metric charts, conversion curve, SHAP waterfall, and A/B bars. The customer checkout renders **entirely from `checkout_config`** — every widget conditional. |
 | **FastAPI WebSocket + `qrcode`** | `/ws/sessions` pushes session updates to the seller dashboard (no polling); `qrcode` renders the customer link as a scannable PNG for the phone demo. |
 | **Prophet + `arch` (GARCH) + `hmmlearn`** (Track 04, §9) | Settlement forecasting needs trend/seasonality (Prophet), volatility clustering (GARCH), and discrete regime detection (HMM) — three complementary views. All three degrade to statistical fallbacks; the Render deploy runs on the fallbacks. |
-| **`anthropic` SDK** (Track 04, §9.4) | The Cash Flow Oracle's CFO recommendation is a real Claude generation over the merchant's full context — templates can't join five inputs into advice that reads like a person wrote it. 6-hour PG/SQLite cache; template fallback when the key is absent. |
+| **Google Gemini** (Track 04, §9.4) | The Cash Flow Oracle's CFO recommendation is a real Gemini generation over the merchant's full context — templates can't join five inputs into advice that reads like a person wrote it. Called via the `generativelanguage` REST API with `httpx` (no LLM SDK). 6-hour PG/SQLite cache; template fallback when the key is absent. |
 | **Docker Compose** | One command brings up PG + Redis + seeder + API + dashboard with correct boot ordering and health gates. |
 | **joblib** | Simple, compressed serialisation of the model **and** its SHAP explainer as one bundle. |
 
@@ -601,13 +601,13 @@ the first thing to tune against real data; they are in `config.py`.
 
 ### 9.4 LLM recommendation — why template strings fail here
 
-`POST /oracle/llm_recommendation` makes a real Anthropic call
-(`CFO_LLM_MODEL`, default `claude-sonnet-4-6`) with the full merchant context —
-forecast, regime + confidence, the specific stress window and shortfall, peer
-percentiles, and the carry-cost vs late-penalty maths — behind the system
-prompt *"You are a CFO advisor for Indian ecommerce merchants... reference
-specific numbers, dates, and the merchant's category context. Never use
-generic advice."*
+`POST /oracle/llm_recommendation` makes a real **Google Gemini** call
+(`generativelanguage` REST API via `httpx`, no SDK; `CFO_LLM_MODEL`, default
+`gemini-2.5-flash`) with the full merchant context — forecast, regime +
+confidence, the specific stress window and shortfall, peer percentiles, and the
+carry-cost vs late-penalty maths — behind the system prompt *"You are a CFO
+advisor for Indian ecommerce merchants... reference specific numbers, dates, and
+the merchant's category context. Never use generic advice."*
 
 Templates were tried first and don't clear the bar for this surface:
 
@@ -627,10 +627,11 @@ Templates were tried first and don't clear the bar for this surface:
 
 The response is **cached in Postgres/SQLite for 6 hours** keyed by a hash of the
 salient inputs (merchant, regime, stress shape, net-benefit bucket), so a
-merchant reloading the page doesn't re-bill the API. If `ANTHROPIC_API_KEY` is
-unset or the call fails, `template_recommendation()` returns a specific,
-number-referencing fallback and `source` flips to `"template"` — the dashboard
-shows the "AI recommendation unavailable" note and carries on.
+merchant reloading the page doesn't re-bill the API. If `GEMINI_API_KEY`
+(or `GOOGLE_API_KEY`) is unset or the call fails, `template_recommendation()`
+returns a specific, number-referencing fallback and `source` flips to
+`"template"` — the dashboard shows the "AI recommendation unavailable" note and
+carries on.
 
 ### 9.5 Scenario simulator methodology
 

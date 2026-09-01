@@ -200,7 +200,7 @@ def test_peer_comparison_ranks_in_distribution():
 
 
 def test_llm_recommendation_falls_back_to_template(monkeypatch):
-    monkeypatch.setattr(LLM.C, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(LLM.C, "GEMINI_API_KEY", "")
     payload = {
         "merchant_id": "m_fashion_01",
         "merchant": {"display_name": "Kapda & Co", "archetype": "fashion",
@@ -218,7 +218,7 @@ def test_llm_recommendation_falls_back_to_template(monkeypatch):
                                 "late_payment_penalty_avoided_inr": 14_000},
         "credit_apply_by_date": "2026-09-17",
     }
-    assert asyncio.new_event_loop().run_until_complete(LLM._call_anthropic("hi")) is None
+    assert asyncio.new_event_loop().run_until_complete(LLM._call_gemini("hi")) is None
     tmpl = LLM.template_recommendation(payload)
     assert isinstance(tmpl, str) and len(tmpl) > 40
     assert "Kapda & Co" in tmpl

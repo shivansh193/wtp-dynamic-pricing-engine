@@ -1,10 +1,11 @@
 """
-LLM (Anthropic Claude) working-capital recommendation for the Cash Flow Oracle.
+LLM (Google Gemini) working-capital recommendation for the Cash Flow Oracle.
 
-`generate_recommendation()` builds a merchant-specific prompt, calls Claude,
-caches the result in Postgres/SQLite for 6 hours, and falls back to a
-deterministic template sentence if the API key is missing or the call fails.
-The route always gets a usable string plus a `source` of "llm" | "template".
+`generate_recommendation()` builds a merchant-specific prompt, calls Gemini
+(generativelanguage REST API, no SDK dependency), caches the result in
+Postgres/SQLite for 6 hours, and falls back to a deterministic template
+sentence if the API key is missing or the call fails. The route always gets a
+usable string plus a `source` of "llm" | "template".
 """
 
 from __future__ import annotations
@@ -138,25 +139,35 @@ def template_recommendation(payload: dict) -> str:
     )
 
 
-async def _call_anthropic(prompt: str) -> str | None:
-    key = C.ANTHROPIC_API_KEY
+_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+
+async def _call_gemini(prompt: str) -> str | None:
+    key = C.GEMINI_API_KEY
     if not key:
         return None
     try:
-        import anthropic  # type: ignore
+        import httpx  # already a dependency; no LLM SDK needed
 
-        client = anthropic.AsyncAnthropic(api_key=key)
-        msg = await client.messages.create(
-            model=C.LLM_MODEL,
-            max_tokens=400,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        parts = [b.text for b in msg.content if getattr(b, "type", "") == "text"]
-        text = " ".join(p.strip() for p in parts).strip()
+        body = {
+            "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"maxOutputTokens": 400, "temperature": 0.6},
+        }
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                _GEMINI_URL.format(model=C.LLM_MODEL),
+                headers={"x-goog-api-key": key},
+                json=body,
+            )
+        resp.raise_for_status()
+        data = resp.json()
+        cand = (data.get("candidates") or [{}])[0]
+        parts = (cand.get("content") or {}).get("parts") or []
+        text = " ".join(p.get("text", "").strip() for p in parts).strip()
         return text or None
     except Exception as exc:  # noqa: BLE001
-        print(f"[cfo.llm] Anthropic call failed ({exc!r}) -> template fallback")
+        print(f"[cfo.llm] Gemini call failed ({exc!r}) -> template fallback")
         return None
 
 
@@ -178,7 +189,7 @@ async def generate_recommendation(payload: dict) -> dict:
         }
 
     prompt = build_prompt(payload)
-    text = await _call_anthropic(prompt)
+    text = await _call_gemini(prompt)
     source = "llm" if text else "template"
     model = C.LLM_MODEL if text else "template"
     if not text:
