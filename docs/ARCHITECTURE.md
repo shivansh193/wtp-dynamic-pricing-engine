@@ -1,6 +1,8 @@
-# Architecture — WTP Dynamic Pricing Engine
+# Architecture — WTP Dynamic Pricing Engine + Cash Flow Oracle
 
-Razorpay AI Buildathon 2026 · Track 01 (AI Growth & Agentic Commerce)
+Razorpay AI Buildathon 2026 · Track 01 (AI Growth & Agentic Commerce) — with a
+full **Track 04 (AI Cash Flow Oracle)** build in the same monorepo, covered in
+§9.
 
 ---
 
@@ -295,7 +297,8 @@ flowchart LR
 | **pytrends / RBI DBIE** | Ground the synthetic data in *real* Indian demand seasonality and payment-mix trends. |
 | **Next.js 14 + Tailwind + Recharts** | App-router routes for `/dashboard`, `/checkout/{id}`, `/merchant/{id}`, `/merchant/dashboard` (conversion analytics: funnel, A/B, intervention performance); utility CSS for a polished demo quickly; Recharts for the metric charts, conversion curve, SHAP waterfall, and A/B bars. The customer checkout renders **entirely from `checkout_config`** — every widget conditional. |
 | **FastAPI WebSocket + `qrcode`** | `/ws/sessions` pushes session updates to the seller dashboard (no polling); `qrcode` renders the customer link as a scannable PNG for the phone demo. |
-| **Prophet + `arch` (GARCH) + `hmmlearn`** (Track 04) | Settlement forecasting needs trend/seasonality (Prophet), volatility clustering (GARCH), and discrete regime detection (HMM) — three complementary views. |
+| **Prophet + `arch` (GARCH) + `hmmlearn`** (Track 04, §9) | Settlement forecasting needs trend/seasonality (Prophet), volatility clustering (GARCH), and discrete regime detection (HMM) — three complementary views. All three degrade to statistical fallbacks; the Render deploy runs on the fallbacks. |
+| **`anthropic` SDK** (Track 04, §9.4) | The Cash Flow Oracle's CFO recommendation is a real Claude generation over the merchant's full context — templates can't join five inputs into advice that reads like a person wrote it. 6-hour PG/SQLite cache; template fallback when the key is absent. |
 | **Docker Compose** | One command brings up PG + Redis + seeder + API + dashboard with correct boot ordering and health gates. |
 | **joblib** | Simple, compressed serialisation of the model **and** its SHAP explainer as one bundle. |
 
@@ -511,3 +514,237 @@ codebase and the cap constants are the first thing a reviewer should check
   `str(signals.get(f))` in the numpy row builder.
 - **`tsconfig.tsbuildinfo` got committed** by a stray `tsc --noEmit`. Added
   `*.tsbuildinfo` to `dashboard/.gitignore` and untracked it.
+- **Cash Flow Oracle cash curve had every merchant insolvent by October.**
+  First cut set `daily_burn = 1.04 x avg_daily_settlement` (the *annual* mean).
+  The Sep–Oct forecast sits below that annual mean for almost everyone, so
+  `yhat - burn` was consistently negative and the balance fell monotonically.
+  Fixed: burn tracks the *recent* 90-day run-rate at `0.93x` (opex is ~93% of
+  settlements; the retained margin is the buffer), and the cumulative band
+  accumulates as root-sum-square, not a linear sum. Stress coverage dropped
+  from 26/30 merchants (all 50+ day periods) to 12/30 (mostly 10–35 days).
+- **`stress_freq_fn` signature mismatch.** `peer_comparison` called it with a
+  merchant *id* string but the route's implementation expected the merchant
+  *dict* -> `AttributeError: 'str' object has no attribute 'get'`. Standardised
+  on the dict.
+
+---
+
+## 9. Track 04 — Cash Flow Oracle
+
+A separate product on the same monorepo (and, in the deploy, the same FastAPI
+process): a 30–60 day forward view of a merchant's **settlement cash position**
+with confidence bands, stress-period detection, and proactive credit timing.
+The premise is that Razorpay Capital today is *reactive* — a merchant applies
+when they are already short — and the signal to act exists in the settlement
+stream weeks earlier. Routes live under `/oracle/*`
+(`cash-flow-oracle/api/oracle_routes.py`), mounted on both the standalone CFO
+app and `api/main.py`. The Next.js dashboard is `/cash-flow-oracle`.
+
+### 9.1 Why cash-flow prediction is harder than it looks
+
+A merchant's daily net settlement is not a tidy time series. Three effects
+interact, and modelling any one in isolation gives a confidently wrong answer:
+
+- **Volatility clustering.** Quiet weeks and wild weeks come in runs — a
+  chargeback wave, a viral SKU, a gateway wobble. The *level* forecast can be
+  fine while the *band* is badly miscalibrated, which is exactly the number a
+  credit decision hinges on.
+- **Regime changes.** The same +12% week means "normal Diwali build-up" in a
+  high-season regime and "dead-cat bounce" in a stress regime. A single global
+  model smears these together; the right buffer differs by 2–3x between them.
+- **Festival effects.** Diwali / wedding season / FY-end / monsoon each bend the
+  series by 15–110% depending on category, and they *move* year to year with
+  the lunar calendar. They also change the *shape* (a pull-forward spike is
+  followed by a below-trend correction), so a naive seasonal index over-credits
+  the post-festival weeks.
+
+And they compound: a festival spike lands during a high-vol regime, the
+post-festival correction can tip a thin-margin merchant into a stress regime,
+which widens the band further. You need a model of the level, a model of the
+variance, and a model of the discrete state — and they have to talk to each
+other.
+
+### 9.2 GARCH + HMM + Prophet — what each contributes
+
+| Model | Answers | What the others can't give |
+|---|---|---|
+| **Prophet** (`models/forecast_prophet.py`) | the **level**: 30–60 day daily forecast with yearly + weekly seasonality and an 80% interval | trend + multiplicative seasonality with holiday-style structure; a point forecast the merchant can read off a chart |
+| **GARCH(1,1)** (`models/garch.py`) on daily settlement returns | the **variance**: a conditional volatility that *clusters* and mean-reverts to `omega/(1-alpha-beta)` | Prophet's interval is homoskedastic-ish; GARCH is what widens the band going into a volatile stretch and tightens it after. The forecast vol also scales the fallback forecaster's band and drives the anomaly sigma. |
+| **3-state Gaussian HMM** (`models/regime_hmm.py`) on `[level-vs-trend, abs(return)]` | the **discrete state**: `high_season` / `low_season` / `stress`, re-labelled from raw state ids by fitted mean/vol | neither of the others emits a *regime*; it's what selects the planning number (lower band in stress), the category blurb, and the alert-urgency floor |
+
+Each degrades to a documented statistical fallback (EWMA vol, quantile+vol
+regime rules, additive trend x DOW x MOY decomposition) so the endpoint always
+returns a sane answer — the Render deploy runs entirely on the fallbacks
+(`prophet` / `arch` / `hmmlearn` are a large compiled tree kept in
+`cash-flow-oracle/requirements.txt`, out of the Track 01 image). `engine` in
+the response says which parts ran real vs fallback.
+
+### 9.3 Cash-position curve
+
+The models forecast *settlements*; the dashboard chart and the stress logic need
+a *balance*. The curve is reconstructed:
+
+```
+balance[t] = balance[t-1] + settlement[t] - daily_burn
+```
+
+anchored at `balance[today] = CASH_ON_HAND_RATIO x trailing-30-day net`
+(a merchant holds ~2 weeks of runway, not a month of gross), with
+`daily_burn = BURN_RATIO x mean(last 90 days)` — opex scales with the recent
+run-rate, `BURN_RATIO = 0.93` leaves the retained margin as the structural
+buffer. History is walked backwards from today; the forecast forwards, with the
+band accumulating as **root-sum-square** of the daily half-widths (daily errors
+partly cancel — a linear sum blows the 60-day band out to nonsense). A
+**stress period** is >=3 contiguous forecast days with expected balance below
+`operating_threshold` (30% of monthly average settlement). These constants are
+the first thing to tune against real data; they are in `config.py`.
+
+### 9.4 LLM recommendation — why template strings fail here
+
+`POST /oracle/llm_recommendation` makes a real Anthropic call
+(`CFO_LLM_MODEL`, default `claude-sonnet-4-6`) with the full merchant context —
+forecast, regime + confidence, the specific stress window and shortfall, peer
+percentiles, and the carry-cost vs late-penalty maths — behind the system
+prompt *"You are a CFO advisor for Indian ecommerce merchants... reference
+specific numbers, dates, and the merchant's category context. Never use
+generic advice."*
+
+Templates were tried first and don't clear the bar for this surface:
+
+- **The advice is a join across five inputs.** "Draw Rs 7.2L by 28 Sep because
+  your Diwali build-up peaks 12 Oct and the carry cost (Rs 4k) is a fifth of the
+  penalty exposure (Rs 11k)" is a sentence that depends on the forecast trough,
+  the disbursement lead, the festival calendar, the penalty rate, *and* the
+  peer context. A template that covers the real combinations is a decision tree
+  with dozens of leaves, and it still reads like a decision tree.
+- **Category voice matters for trust.** A fashion merchant and a grocery
+  merchant with the same numeric situation need different framing (discretionary
+  vs staples, wedding-season vs monsoon). Merchants discount advice that sounds
+  like a form letter — the whole point is that they act on it early.
+- **It has to sound like a person.** The template fallback is deliberately
+  plain and labelled *"pattern-based"* in the UI; the LLM version is the one
+  meant to be persuasive.
+
+The response is **cached in Postgres/SQLite for 6 hours** keyed by a hash of the
+salient inputs (merchant, regime, stress shape, net-benefit bucket), so a
+merchant reloading the page doesn't re-bill the API. If `ANTHROPIC_API_KEY` is
+unset or the call fails, `template_recommendation()` returns a specific,
+number-referencing fallback and `source` flips to `"template"` — the dashboard
+shows the "AI recommendation unavailable" note and carries on.
+
+### 9.5 Scenario simulator methodology
+
+`POST /oracle/scenario` re-runs the forecast with a **multiplicative factor**
+over the shock window. Each shock type has a shape `(sign, in-window fraction,
+post-window tail fraction, tail days)`:
+
+| Shock | Sign | In-window | Tail | Rationale |
+|---|---|---|---|---|
+| `discount_sale` | + | 0.60*mag | -0.20*mag, 10d | volume lift during, pull-forward dip after |
+| `marketing_spend` | + | 0.50*mag | +0.20*mag, 14d | lift during + a decaying halo |
+| `inventory_purchase` | - | 0.55*mag | +0.10*mag, 7d | cash diverted to suppliers, mild rebound |
+| `payment_gateway_outage` | - | 0.90*mag | +0.30*mag, 5d | hard drop, then delayed settlements clear |
+
+The tail decays linearly to zero over `tail_days`. Both the original and shocked
+settlement forecasts are pushed through the **same** cash-curve reconstruction
+(same opening balance and burn), so the delta is attributable purely to the
+shock. The response reports the end-of-horizon and worst-point balance deltas,
+the stress periods **before vs after**, and the *new* ones introduced (windows
+not present in the baseline) with an updated carry-cost recommendation if the
+stress picture changed. Runs are persisted to `scenario_runs` keyed by
+`merchant_id` + `scenario_id`.
+
+This is a *what-if* tool, not a forecast: the shock shapes are stylised, and a
+real integration would learn them from the merchant's own history of
+sales / marketing events.
+
+### 9.6 Peer benchmarking — anonymisation
+
+`GET /oracle/peers/{merchant_id}` positions a merchant against **same-category**
+peers (same city tier too when that group has >=3 members, else category-only —
+stated in `peer_group`). What crosses the wire:
+
+- **No peer identities.** Only the *distributions* — sorted arrays of peer
+  settlement volatility and average daily settlement — plus aggregate min / max
+  / mean, and the requesting merchant's **percentile rank** within them. The
+  histogram the UI draws is built from the distribution array; no row maps back
+  to a merchant.
+- **Derived, low-cardinality metrics only.** Volatility (a unitless ratio) and
+  an average — not raw settlement series, not dates, not transaction counts.
+- **Small-group guard.** With `n_peers < 3` the tier constraint is dropped so a
+  percentile is never computed against one or two identifiable businesses.
+- **Stress frequency** is a heuristic from stored volatility
+  (`2 + 8*clamp((vol-0.2)/0.5)` periods/year), not a per-peer settlement scan —
+  it avoids fetching every peer's history to answer a comparison question.
+
+In a real deployment the peer set is large and the same rules apply: ship
+percentiles and bucket counts, never joinable rows.
+
+### 9.7 Oracle data flow
+
+```mermaid
+flowchart TD
+    subgraph Offline
+        GEN[Synthetic generator\n30 merchants x 3y daily settlements\nDiwali / wedding / monsoon / FY-end]
+        SEED[seed.py\nper-merchant avg_daily / GARCH vol / threshold]
+        GEN --> SEED
+    end
+
+    subgraph Store["SQLite / Postgres"]
+        M[(merchants\n+ city_tier, thresholds,\ndisbursement, penalty)]
+        S[(merchant_settlements)]
+        SC[(scenario_runs)]
+        LC[(llm_recommendations - 6h cache)]
+    end
+    SEED --> M
+    SEED --> S
+
+    subgraph API["/oracle/*  (statistical fallbacks on Render)"]
+        SER[series fetch]
+        GAR[GARCH(1,1)\nconditional + forecast vol]
+        HMM[3-state HMM\nregime + confidence]
+        PRO[Prophet / additive\n60-day level + band]
+        CASH[cash-position curve\nopening / burn / RSS band]
+        STR[stress periods\nbelow operating_threshold]
+        PEER[peer_comparison\npercentiles only]
+        ANOM[anomaly scan\nabove 1.5 / 2.0 sigma]
+        CARRY[carry-cost + apply-by\ntrough minus disbursement_days]
+        LLM[Claude recommendation\n+ template fallback]
+        ALERT[alert_preview\nurgency from stress timing]
+    end
+
+    S --> SER --> GAR --> PRO
+    SER --> HMM
+    GAR --> CASH
+    PRO --> CASH --> STR
+    M --> CASH
+    M --> PEER
+    SER --> ANOM
+    STR --> CARRY --> LLM
+    HMM --> LLM
+    PEER --> LLM
+    LLM <--> LC
+    SC -. persisted .- CASH
+    STR --> ALERT
+    HMM --> ALERT
+
+    subgraph UI["/cash-flow-oracle"]
+        HERO[Cash Forecast hero\nchart + 3 stat cards]
+        REG[Regime panel]
+        CRED[LLM credit card\n+ timing optimiser]
+        WA[WhatsApp alert mockup]
+        SIM[Scenario simulator]
+        BENCH[Peer benchmarking]
+        FEED[Anomaly feed]
+        FP[Settlement fingerprint\n7x52 + festival curves]
+    end
+    CASH --> HERO
+    HMM --> REG
+    LLM --> CRED
+    CARRY --> CRED
+    ALERT --> WA
+    CASH --> SIM
+    PEER --> BENCH
+    ANOM --> FEED
+    SER --> FP
+```
