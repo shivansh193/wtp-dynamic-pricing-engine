@@ -4,10 +4,16 @@
 -- ==========================================================================
 
 CREATE TABLE IF NOT EXISTS merchants (
-    merchant_id   TEXT PRIMARY KEY,
-    archetype     TEXT NOT NULL,
-    display_name  TEXT NOT NULL,
-    onboarded_on  DATE NOT NULL
+    merchant_id                TEXT PRIMARY KEY,
+    archetype                  TEXT NOT NULL,       -- == merchant_category
+    display_name               TEXT NOT NULL,
+    onboarded_on               DATE NOT NULL,
+    city_tier                  INTEGER,
+    avg_daily_settlement       NUMERIC(16,2),       -- trailing-365d mean, INR
+    settlement_volatility      NUMERIC(10,6),       -- GARCH-derived daily return vol
+    operating_threshold        NUMERIC(16,2),       -- 30% of monthly avg settlement
+    capital_disbursement_days  INTEGER,             -- Razorpay Capital lead time (2-3)
+    late_payment_penalty_rate  NUMERIC(6,3)         -- % per month (1.5-3.0)
 );
 
 CREATE TABLE IF NOT EXISTS merchant_settlements (
@@ -40,4 +46,28 @@ CREATE TABLE IF NOT EXISTS forecast_runs (
     current_cash_position NUMERIC,
     stress_days    INTEGER,
     recommendation TEXT
+);
+
+-- scenario simulator runs, keyed by merchant + scenario id
+CREATE TABLE IF NOT EXISTS scenario_runs (
+    scenario_id      TEXT PRIMARY KEY,
+    merchant_id      TEXT NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    shock_type       TEXT NOT NULL,
+    shock_magnitude  NUMERIC NOT NULL,        -- percentage, e.g. 20 = +/-20%
+    shock_start_date DATE NOT NULL,
+    shock_duration_days INTEGER NOT NULL,
+    result           JSONB NOT NULL           -- full scenario response snapshot
+);
+CREATE INDEX IF NOT EXISTS ix_scenario_merchant ON scenario_runs (merchant_id);
+
+-- 6-hour cache for the LLM (Claude) recommendation
+CREATE TABLE IF NOT EXISTS llm_recommendations (
+    merchant_id   TEXT NOT NULL,
+    context_hash  TEXT NOT NULL,              -- hash of the prompt inputs
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    recommendation TEXT NOT NULL,
+    model         TEXT NOT NULL,
+    source        TEXT NOT NULL,              -- "llm" | "template"
+    PRIMARY KEY (merchant_id, context_hash)
 );

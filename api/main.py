@@ -85,10 +85,27 @@ async def lifespan(app: FastAPI):
         log(f"model warm-up failed: {exc!r} (is model/artifacts populated?)", level="WARN")
     await get_ip_service().startup()
     await db.connect()
+
+    # Track 04: Cash Flow Oracle shares this process. Connect + seed its store
+    # so the first /oracle/* request is warm. Non-fatal if it can't.
+    try:
+        from cash_flow_oracle.api.oracle_routes import _ensure_ready as _cfo_ready
+
+        await _cfo_ready()
+        log("cash flow oracle ready (/oracle/*)")
+    except Exception as exc:  # noqa: BLE001
+        log(f"cash flow oracle warm-up skipped: {exc!r}", level="WARN")
+
     log(f"ready. latency budget = {settings.LATENCY_BUDGET_MS}ms, db backend = {db.backend}")
     yield
     await get_ip_service().shutdown()
     await db.disconnect()
+    try:
+        from cash_flow_oracle.db import store as _cfo_store
+
+        await _cfo_store.close()
+    except Exception:  # noqa: BLE001
+        pass
     log("shutdown complete")
 
 
@@ -144,6 +161,16 @@ async def timing_and_logging(request: Request, call_next):
 
 
 app.include_router(enrich_router)
+
+# Track 04: Cash Flow Oracle - /oracle/* on the same service (statistical
+# fallbacks for GARCH/HMM/Prophet; prophet/arch/hmmlearn are not in the
+# Track 01 image). See docs/ARCHITECTURE.md Track 04.
+try:
+    from cash_flow_oracle.api.oracle_routes import router as _oracle_router
+
+    app.include_router(_oracle_router)
+except Exception as _exc:  # noqa: BLE001
+    log(f"cash flow oracle routes not mounted: {_exc!r}", level="WARN")
 
 
 # --------------------------------------------------------------------------- #

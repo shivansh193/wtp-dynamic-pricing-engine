@@ -24,6 +24,7 @@ COPY data-pipeline/ ./data-pipeline/
 COPY model/ ./model/
 COPY api/ ./api/
 COPY ip-enrichment/ ./ip-enrichment/
+COPY cash-flow-oracle/ ./cash-flow-oracle/
 COPY scripts/ ./scripts/
 COPY pytest.ini .
 
@@ -42,6 +43,10 @@ RUN if [ "$BAKE_MODEL" = "1" ]; then \
       OMP_NUM_THREADS=4 SYNTHETIC_ROWS=$SYNTHETIC_ROWS TRAIN_FAST=1 \
         bash scripts/seed_offline.sh ; \
     fi
+
+# Track 04: bake the Cash Flow Oracle's synthetic settlement DB into the image
+# (SQLite, ~33k rows, deterministic, offline) so /oracle/* is warm on cold start.
+RUN if [ "$BAKE_MODEL" = "1" ]; then python scripts/cfo.py seed ; fi
 
 EXPOSE 8000
 

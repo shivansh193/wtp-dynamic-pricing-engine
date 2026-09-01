@@ -20,7 +20,48 @@ RANDOM_SEED = int(os.getenv("CFO_RANDOM_SEED", "7"))
 # Synthetic settlement generation
 # ------------------------------------------------------------------ #
 HISTORY_YEARS = 3
-MERCHANTS_PER_ARCHETYPE = 2  # -> 10 merchants total in the scaffold
+MERCHANTS_PER_ARCHETYPE = 6  # -> 30 merchants (enough for a peer distribution)
+
+# each archetype's merchants are spread across the three city tiers, round-robin
+CITY_TIERS = [1, 2, 3]
+
+# realistic nominal average *daily* settlement per category (INR). The seeder
+# overwrites each merchant's stored `avg_daily_settlement` with its own
+# trailing-365-day mean; this is only the generator's starting point.
+CATEGORY_AVG_DAILY_INR = {
+    "fashion": 220_000, "electronics": 640_000, "grocery": 380_000,
+    "home": 300_000, "services": 260_000,
+}
+# tier scales the base: a Tier-1 merchant settles more than a Tier-3 peer
+CITY_TIER_SCALE = {1: 1.25, 2: 1.0, 3: 0.72}
+
+# operating_threshold = minimum cash position to stay solvent
+#   = OPERATING_THRESHOLD_FRACTION x (avg_daily_settlement x 30)
+OPERATING_THRESHOLD_FRACTION = 0.30
+
+# cash-position curve model (see ARCHITECTURE.md Track 04):
+#   opening balance = CASH_ON_HAND_RATIO x trailing-30-day net settlement
+#     (a merchant holds ~2 weeks of runway, not a full month of gross)
+#   daily burn      = BURN_RATIO x mean(last 90 days of net settlement)
+#     (opex is ~93% of settlements; the retained margin is the structural buffer)
+CASH_ON_HAND_RATIO = 0.55
+BURN_RATIO = 0.93
+
+# Razorpay Capital disbursement lead time (days), randomised per merchant
+CAPITAL_DISBURSEMENT_DAYS = (2, 3)
+# late-payment penalty on drawn working capital, % per month, per merchant
+LATE_PAYMENT_PENALTY_PCT = (1.5, 3.0)
+# assumed Razorpay Capital borrowing cost, % per month (flat, for carry-cost math)
+CAPITAL_BORROW_COST_PCT_PER_MONTH = 1.5
+
+# anomaly thresholds (sigma of the GARCH-implied settlement distribution)
+ANOMALY_SIGMA_FORECAST_FLAG = 2.0   # POST /oracle/forecast anomaly_flag
+ANOMALY_SIGMA_FEED = 1.5           # GET  /oracle/anomalies/{id} feed
+
+# LLM recommendation
+LLM_MODEL = os.getenv("CFO_LLM_MODEL", "claude-sonnet-4-6")
+LLM_CACHE_TTL_HOURS = 6
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
 # archetype -> (daily base settlement INR, day-to-day noise sigma (lognormal),
 #               festive spike gain, monsoon dip, march FY-end gain,

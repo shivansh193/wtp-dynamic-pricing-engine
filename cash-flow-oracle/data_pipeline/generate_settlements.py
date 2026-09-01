@@ -62,9 +62,9 @@ def _seasonal_multiplier(d: date, arch: dict) -> float:
 
 
 def generate_for_merchant(merchant_id: str, archetype: str, rng: np.random.Generator,
-                          start: date, end: date) -> list[tuple]:
+                          start: date, end: date, city_tier: int = 2) -> list[tuple]:
     arch = C.ARCHETYPES[archetype]
-    base = arch["base_daily_inr"]
+    base = arch["base_daily_inr"] * C.CITY_TIER_SCALE.get(city_tier, 1.0)
     sigma = arch["noise_sigma"]
 
     rows: list[tuple] = []
@@ -114,14 +114,47 @@ def generate_all() -> tuple[list[dict], list[tuple]]:
     for archetype in C.ARCHETYPES:
         for k in range(1, C.MERCHANTS_PER_ARCHETYPE + 1):
             mid = f"m_{archetype}_{k:02d}"
+            city_tier = C.CITY_TIERS[(k - 1) % len(C.CITY_TIERS)]
+            disb_days = int(rng.integers(C.CAPITAL_DISBURSEMENT_DAYS[0],
+                                         C.CAPITAL_DISBURSEMENT_DAYS[1] + 1))
+            penalty = round(float(rng.uniform(*C.LATE_PAYMENT_PENALTY_PCT)), 2)
             merchants.append({
                 "merchant_id": mid,
                 "archetype": archetype,
-                "display_name": f"{archetype.title()} Merchant {k}",
+                "display_name": _merchant_name(archetype, k, city_tier),
                 "onboarded_on": start,
+                "city_tier": city_tier,
+                # avg_daily_settlement / settlement_volatility / operating_threshold
+                # are filled in by seed.py from the generated series
+                "avg_daily_settlement": None,
+                "settlement_volatility": None,
+                "operating_threshold": None,
+                "capital_disbursement_days": disb_days,
+                "late_payment_penalty_rate": penalty,
             })
-            settlements.extend(generate_for_merchant(mid, archetype, rng, start, end))
+            settlements.extend(
+                generate_for_merchant(mid, archetype, rng, start, end, city_tier)
+            )
     return merchants, settlements
+
+
+_NAME_POOL = {
+    "fashion": ["Kapda & Co", "ThreadWorks", "Rangrez Apparel", "Vastra House",
+                "Loom & Weft", "Chikankari Studio"],
+    "electronics": ["VoltEdge", "PlugPoint Retail", "Circuit Bazaar",
+                    "GigaMart", "Ampere Devices", "NanoByte Store"],
+    "grocery": ["DailyBasket", "Sabzi Direct", "Ration Route", "FreshCart Local",
+                "Kirana Cloud", "Annapurna Mart"],
+    "home": ["GharSetu", "Nest & Beam", "Divan Living", "Griha Furnish",
+             "Teak & Tone", "Aangan Decor"],
+    "services": ["FlowState SaaS", "Bookmywork", "Prime Care Services",
+                 "TaskGenie", "SlotBook", "Renew Subscriptions"],
+}
+
+
+def _merchant_name(archetype: str, k: int, city_tier: int) -> str:
+    pool = _NAME_POOL.get(archetype, [f"{archetype.title()} Merchant"])
+    return pool[(k - 1) % len(pool)]
 
 
 if __name__ == "__main__":

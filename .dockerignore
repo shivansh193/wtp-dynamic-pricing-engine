@@ -18,6 +18,7 @@ data/processed/*
 model/artifacts/*.joblib
 model/artifacts/*.json
 model/artifacts/*.txt
+cash-flow-oracle/*.sqlite3
 
 # local env
 .env

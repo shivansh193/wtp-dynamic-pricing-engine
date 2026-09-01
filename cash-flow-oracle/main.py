@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 
+from .api.oracle_routes import router as oracle_router
 from .db import store
 from .schemas import ForecastRequest, ForecastResponse
 from .service import MerchantNotFound, build_forecast
@@ -34,6 +35,8 @@ app = FastAPI(
                 "+ Prophet forecast. Razorpay AI Buildathon 2026, Track 04.",
     lifespan=lifespan,
 )
+
+app.include_router(oracle_router)
 
 
 @app.get("/health")

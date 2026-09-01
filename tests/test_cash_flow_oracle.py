@@ -18,8 +18,13 @@ from cash_flow_oracle.models.forecast_prophet import forecast  # noqa: E402
 
 def test_generator_shape_and_seasonality():
     merchants, settlements = generate_all()
-    assert len(merchants) == 10
-    assert len(settlements) > 10_000
+    assert len(merchants) == 30           # 5 archetypes x MERCHANTS_PER_ARCHETYPE
+    assert len(settlements) > 25_000
+    # every merchant carries the extended metadata fields
+    for m in merchants:
+        assert m["city_tier"] in (1, 2, 3)
+        assert 2 <= m["capital_disbursement_days"] <= 3
+        assert 1.5 <= m["late_payment_penalty_rate"] <= 3.0
     # net settled is always non-negative and < gross
     for (_mid, _d, gross, refunds, fees, net, txn) in settlements[:500]:
         assert net >= 0

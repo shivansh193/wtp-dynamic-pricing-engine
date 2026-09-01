@@ -32,9 +32,22 @@ _SQLITE_SCHEMA = (
     _SCHEMA.replace("BIGSERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
     .replace("TIMESTAMPTZ NOT NULL DEFAULT now()", "TEXT NOT NULL DEFAULT (datetime('now'))")
     .replace("NUMERIC(16,2)", "REAL")
+    .replace("NUMERIC(10,6)", "REAL")
+    .replace("NUMERIC(6,3)", "REAL")
     .replace("NUMERIC", "REAL")
+    .replace("JSONB", "TEXT")
     .replace("REFERENCES merchants(merchant_id)", "")
 )
+
+# best-effort column adds for a DB created by an earlier scaffold version
+_MIGRATIONS = [
+    "ALTER TABLE merchants ADD COLUMN city_tier INTEGER",
+    "ALTER TABLE merchants ADD COLUMN avg_daily_settlement REAL",
+    "ALTER TABLE merchants ADD COLUMN settlement_volatility REAL",
+    "ALTER TABLE merchants ADD COLUMN operating_threshold REAL",
+    "ALTER TABLE merchants ADD COLUMN capital_disbursement_days INTEGER",
+    "ALTER TABLE merchants ADD COLUMN late_payment_penalty_rate REAL",
+]
 
 
 class Store:
@@ -52,6 +65,12 @@ class Store:
                                                        timeout=5, command_timeout=10)
                 async with self._pool.acquire() as con:
                     await con.execute(_SCHEMA)
+                    for stmt in _MIGRATIONS:
+                        try:
+                            await con.execute(stmt.replace(
+                                "ADD COLUMN", "ADD COLUMN IF NOT EXISTS"))
+                        except Exception:  # noqa: BLE001
+                            pass
                 self.backend = "postgres"
                 return
             except Exception as exc:  # noqa: BLE001
@@ -64,6 +83,11 @@ class Store:
         con = sqlite3.connect(self._sqlite_path)
         try:
             con.executescript(_SQLITE_SCHEMA)
+            for stmt in _MIGRATIONS:
+                try:
+                    con.execute(stmt)
+                except sqlite3.OperationalError:
+                    pass  # column already exists
             con.commit()
         finally:
             con.close()
@@ -75,22 +99,152 @@ class Store:
     # ------------------------------------------------------------------ #
     # writes (used by seed.py)
     # ------------------------------------------------------------------ #
-    async def upsert_merchant(self, merchant_id: str, archetype: str,
-                              display_name: str, onboarded_on: date) -> None:
+    _MERCHANT_COLS = (
+        "merchant_id", "archetype", "display_name", "onboarded_on", "city_tier",
+        "avg_daily_settlement", "settlement_volatility", "operating_threshold",
+        "capital_disbursement_days", "late_payment_penalty_rate",
+    )
+
+    async def upsert_merchant(self, m: dict) -> None:
+        onb = m["onboarded_on"]
+        vals = (
+            m["merchant_id"], m["archetype"], m["display_name"],
+            onb if hasattr(onb, "isoformat") else onb,
+            m.get("city_tier"), m.get("avg_daily_settlement"),
+            m.get("settlement_volatility"), m.get("operating_threshold"),
+            m.get("capital_disbursement_days"), m.get("late_payment_penalty_rate"),
+        )
         if self.backend == "postgres":
             async with self._pool.acquire() as con:  # type: ignore[union-attr]
                 await con.execute(
-                    """INSERT INTO merchants (merchant_id, archetype, display_name, onboarded_on)
-                       VALUES ($1,$2,$3,$4)
-                       ON CONFLICT (merchant_id) DO UPDATE SET archetype=EXCLUDED.archetype,
-                         display_name=EXCLUDED.display_name, onboarded_on=EXCLUDED.onboarded_on""",
-                    merchant_id, archetype, display_name, onboarded_on,
+                    """INSERT INTO merchants (merchant_id, archetype, display_name,
+                         onboarded_on, city_tier, avg_daily_settlement,
+                         settlement_volatility, operating_threshold,
+                         capital_disbursement_days, late_payment_penalty_rate)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                       ON CONFLICT (merchant_id) DO UPDATE SET
+                         archetype=EXCLUDED.archetype, display_name=EXCLUDED.display_name,
+                         onboarded_on=EXCLUDED.onboarded_on, city_tier=EXCLUDED.city_tier,
+                         avg_daily_settlement=EXCLUDED.avg_daily_settlement,
+                         settlement_volatility=EXCLUDED.settlement_volatility,
+                         operating_threshold=EXCLUDED.operating_threshold,
+                         capital_disbursement_days=EXCLUDED.capital_disbursement_days,
+                         late_payment_penalty_rate=EXCLUDED.late_payment_penalty_rate""",
+                    *vals,
+                )
+            return
+        vals = tuple(v.isoformat() if hasattr(v, "isoformat") else v for v in vals)
+        await asyncio.to_thread(
+            self._sqlite_exec,
+            "INSERT OR REPLACE INTO merchants "
+            "(merchant_id, archetype, display_name, onboarded_on, city_tier, "
+            "avg_daily_settlement, settlement_volatility, operating_threshold, "
+            "capital_disbursement_days, late_payment_penalty_rate) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            vals,
+        )
+
+    async def update_merchant_stats(self, merchant_id: str, *, avg_daily: float,
+                                    volatility: float, threshold: float) -> None:
+        if self.backend == "postgres":
+            async with self._pool.acquire() as con:  # type: ignore[union-attr]
+                await con.execute(
+                    "UPDATE merchants SET avg_daily_settlement=$2, "
+                    "settlement_volatility=$3, operating_threshold=$4 "
+                    "WHERE merchant_id=$1",
+                    merchant_id, avg_daily, volatility, threshold,
                 )
             return
         await asyncio.to_thread(
             self._sqlite_exec,
-            "INSERT OR REPLACE INTO merchants VALUES (?,?,?,?)",
-            (merchant_id, archetype, display_name, onboarded_on.isoformat()),
+            "UPDATE merchants SET avg_daily_settlement=?, settlement_volatility=?, "
+            "operating_threshold=? WHERE merchant_id=?",
+            (avg_daily, volatility, threshold, merchant_id),
+        )
+
+    # ---- scenario runs ---- #
+    async def save_scenario(self, scenario_id: str, merchant_id: str, shock_type: str,
+                            shock_magnitude: float, shock_start_date: date,
+                            shock_duration_days: int, result: dict) -> None:
+        import json as _json
+
+        blob = _json.dumps(result, default=str)
+        sd = shock_start_date.isoformat() if hasattr(shock_start_date, "isoformat") \
+            else str(shock_start_date)
+        if self.backend == "postgres":
+            async with self._pool.acquire() as con:  # type: ignore[union-attr]
+                await con.execute(
+                    """INSERT INTO scenario_runs (scenario_id, merchant_id, shock_type,
+                         shock_magnitude, shock_start_date, shock_duration_days, result)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
+                       ON CONFLICT (scenario_id) DO UPDATE SET result=EXCLUDED.result""",
+                    scenario_id, merchant_id, shock_type, shock_magnitude, sd,
+                    shock_duration_days, blob,
+                )
+            return
+        await asyncio.to_thread(
+            self._sqlite_exec,
+            "INSERT OR REPLACE INTO scenario_runs (scenario_id, merchant_id, "
+            "shock_type, shock_magnitude, shock_start_date, shock_duration_days, "
+            "result) VALUES (?,?,?,?,?,?,?)",
+            (scenario_id, merchant_id, shock_type, shock_magnitude, sd,
+             shock_duration_days, blob),
+        )
+
+    async def list_scenarios(self, merchant_id: str) -> list[dict]:
+        if self.backend == "postgres":
+            async with self._pool.acquire() as con:  # type: ignore[union-attr]
+                rows = await con.fetch(
+                    "SELECT * FROM scenario_runs WHERE merchant_id=$1 "
+                    "ORDER BY created_at DESC LIMIT 50", merchant_id)
+            return [dict(r) for r in rows]
+        return await asyncio.to_thread(
+            self._sqlite_query,
+            "SELECT * FROM scenario_runs WHERE merchant_id=? "
+            "ORDER BY created_at DESC LIMIT 50", (merchant_id,),
+        )
+
+    # ---- LLM recommendation cache ---- #
+    async def get_llm_cache(self, merchant_id: str, context_hash: str,
+                            ttl_hours: int) -> dict | None:
+        if self.backend == "postgres":
+            async with self._pool.acquire() as con:  # type: ignore[union-attr]
+                row = await con.fetchrow(
+                    "SELECT recommendation, model, source, created_at "
+                    "FROM llm_recommendations WHERE merchant_id=$1 AND context_hash=$2 "
+                    "AND created_at > now() - ($3 || ' hours')::interval",
+                    merchant_id, context_hash, str(ttl_hours),
+                )
+            return dict(row) if row else None
+        rows = await asyncio.to_thread(
+            self._sqlite_query,
+            "SELECT recommendation, model, source, created_at "
+            "FROM llm_recommendations WHERE merchant_id=? AND context_hash=? "
+            "AND created_at > datetime('now', ?)",
+            (merchant_id, context_hash, f"-{int(ttl_hours)} hours"),
+        )
+        return rows[0] if rows else None
+
+    async def save_llm_cache(self, merchant_id: str, context_hash: str,
+                             recommendation: str, model: str, source: str) -> None:
+        if self.backend == "postgres":
+            async with self._pool.acquire() as con:  # type: ignore[union-attr]
+                await con.execute(
+                    """INSERT INTO llm_recommendations
+                         (merchant_id, context_hash, recommendation, model, source, created_at)
+                       VALUES ($1,$2,$3,$4,$5, now())
+                       ON CONFLICT (merchant_id, context_hash) DO UPDATE SET
+                         recommendation=EXCLUDED.recommendation, model=EXCLUDED.model,
+                         source=EXCLUDED.source, created_at=now()""",
+                    merchant_id, context_hash, recommendation, model, source,
+                )
+            return
+        await asyncio.to_thread(
+            self._sqlite_exec,
+            "INSERT OR REPLACE INTO llm_recommendations "
+            "(merchant_id, context_hash, recommendation, model, source, created_at) "
+            "VALUES (?,?,?,?,?, datetime('now'))",
+            (merchant_id, context_hash, recommendation, model, source),
         )
 
     async def bulk_insert_settlements(self, rows: Iterable[tuple]) -> int:
