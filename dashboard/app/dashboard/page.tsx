@@ -66,6 +66,13 @@ export default function DashboardPage() {
         <Label>Segment confidence &amp; margin</Label>
         <SegmentExplorer seedSegment={lastCreated?.segment_key} />
       </section>
+
+      <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-100 pt-4 text-[11px] text-zinc-400">
+        <span>Razorpay Buildathon 2026 — Track 01: WTP Dynamic Pricing</span>
+        <Link href="/cash-flow-oracle" className="text-brand hover:underline">
+          Also built → Track 04: AI Cash Flow Oracle
+        </Link>
+      </footer>
     </div>
   );
 }
