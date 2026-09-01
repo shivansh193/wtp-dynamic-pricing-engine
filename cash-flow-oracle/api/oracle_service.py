@@ -563,3 +563,26 @@ def apply_scenario_shock(fc_dates: list[date], fc_yhat: np.ndarray,
 
 def new_scenario_id() -> str:
     return "scn_" + uuid.uuid4().hex[:12]
+
+
+# --------------------------------------------------------------------------- #
+# alert urgency
+# --------------------------------------------------------------------------- #
+def alert_urgency(*, has_stress: bool, days_to_stress: int | None,
+                  disbursement_days: int, regime: str) -> str:
+    """low | medium | high.
+
+    high   - stress is imminent (you can't get funds in time) or the merchant
+             is already in a stress regime
+    medium - a stress period is coming inside the 60-day window
+    low    - no stress period projected
+    """
+    if not has_stress:
+        return "low"
+    if regime == "stress":
+        return "high"
+    if days_to_stress is not None and days_to_stress <= disbursement_days + 7:
+        return "high"
+    if days_to_stress is not None and days_to_stress <= 45:
+        return "medium"
+    return "medium"

@@ -411,8 +411,9 @@ async def oracle_alert_preview(req: AlertPreviewRequest) -> dict:
         apply_by = fc.get("credit_apply_by_date")
         apply_by = str(apply_by) if apply_by else None
         shortfall = OS.inr(s0.get("shortfall_at_trough") or 0)
-        imminent = days_to <= disb + 7 or fc["regime"] == "stress"
-        urgency = "high" if imminent else ("medium" if days_to <= 45 else "low")
+        urgency = OS.alert_urgency(
+            has_stress=True, days_to_stress=days_to,
+            disbursement_days=disb, regime=fc["regime"])
         title = ("Cash flow alert: action needed"
                  if urgency == "high" else "Cash flow heads-up")
         body = (
