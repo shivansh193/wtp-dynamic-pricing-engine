@@ -22,16 +22,22 @@ purpose, because it's exactly the design.
   1. Seller dashboard — `…vercel.app/dashboard`
   2. A customer checkout link for the **price-sensitive** profile (generate it first, see below)
   3. Merchant analytics — `…vercel.app/merchant/dashboard` (scroll to the A/B panel)
-  4. Cash Flow Oracle — `…vercel.app/cash-flow-oracle`, merchant **Rangrez Apparel** already selected
+  4. Cash Flow Oracle — `…vercel.app/cash-flow-oracle`, on a merchant that
+     **currently shows a stress period** (see next bullet)
 - **Price-sensitive profile** (link generator → Custom): Tier 3 / PIN `800001`,
   Android budget, UPI, prepaid orders ~4, return rate ~25%. Confirm the checkout
   shows **₹4,499** and a monthly line near **₹375/month at 0% interest**.
 - **Metro profile:** the built-in **High income** preset. Confirm **₹5,749** and
   a *free 1-year extended warranty* offer (no discount, no timer).
-- The Track 01 figures (₹4,499, ₹375/mo, ₹5,749) are stable. The **Cash Flow
-  Oracle dates and amounts move with the calendar** — open Rangrez Apparel on
-  recording day and read the real numbers off screen, then swap the four or five
-  figures in the Track 4 section.
+- **Pick the Cash Flow Oracle merchant on the day.** The forecast re-anchors to
+  "today", so which merchants are in a stress period drifts. As of Sept 4,
+  **GigaMart (electronics, Tier 1)** shows a clean one: ~15-day squeeze from
+  Sept 21, ~₹47L short at the trough, apply by Sept 27, borrowing early nets
+  ~₹32k. If GigaMart has gone quiet by recording day, click down the dropdown —
+  the "Next stress period" stat card tells you instantly which merchants have
+  one. Electronics and Home merchants tend to. Then read that merchant's real
+  numbers into the Track 4 lines.
+- The Track 01 figures (₹4,499, ₹375/mo, ₹5,749) are stable.
 
 ---
 
@@ -124,13 +130,14 @@ Spoken lines are in quote blocks. `[bracketed]` lines are what you do on screen.
 > settlements. GARCH for the volatility, a hidden Markov model for the season,
 > Prophet for the forward curve.
 >
-> `[Cash Flow Oracle tab, Rangrez Apparel selected]`
+> `[Cash Flow Oracle tab, GigaMart selected]`
 >
-> For this merchant it flags a sixteen-day cash squeeze starting September
-> twenty-first — short about seven lakh at the low point. It works backwards from
-> Capital's disbursement time to one date, apply by the twenty-eighth, and it
-> shows that borrowing early beats the late-payment penalty by around seven
-> thousand rupees. The forecast error is on the page, twenty-six percent on
+> For this merchant it flags a fifteen-day cash squeeze starting September
+> twenty-first — the balance drops about forty-seven lakh short of the operating
+> floor at the low point. It works backwards from Capital's disbursement time to
+> one date, apply by the twenty-seventh, and it shows that borrowing early beats
+> the late-payment penalty by around thirty-two thousand rupees. The forecast
+> error is on the page, twenty-six percent on
 > held-out days, and the model flags when it's running on fallbacks. That's the
 > honest exception list the track asks for.
 
@@ -181,11 +188,12 @@ Spoken lines are in quote blocks. `[bracketed]` lines are what you do on screen.
 
 ## Numbers to re-read on recording day (Track 4 only)
 
-Open Rangrez Apparel in the Cash Flow Oracle and read, in order: the stress-
-period **start date** and **length**, the **shortfall at the trough**, the
-**apply-by date**, the **net benefit** on the credit card, and the **MAPE** on
-the third stat card. Drop them into the Track 4 lines. Everything in Track 01 is
-stable.
+Open your chosen merchant in the Cash Flow Oracle (GigaMart, or whichever
+currently has a "Next stress period" that isn't "None") and read, in order: the
+stress-period **start date** and **length**, the **shortfall at the trough**,
+the **apply-by date**, the **net benefit** on the credit card, and the **MAPE**
+on the third stat card. Drop them into the Track 4 lines. Everything in Track 01
+is stable.
 
 ## Optional: bump merchant count to match the brief exactly
 

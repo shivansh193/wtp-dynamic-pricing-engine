@@ -62,8 +62,10 @@ def build_prompt(payload: dict) -> str:
         f"Tier {m.get('city_tier')} city).",
         f"Average daily settlement: {_inr(m.get('avg_daily_settlement'))}. "
         f"Operating threshold (min safe cash): {_inr(m.get('operating_threshold'))}.",
-        f"Current cash position: {_inr(fc.get('current_cash_position'))}. "
-        f"Trailing 7-day net: {_inr(fc.get('trailing_7d_net_inr'))}.",
+        f"Current cash on hand: "
+        f"{_inr(fc.get('cash_on_hand', fc.get('current_cash_position')))} "
+        f"(this is the number on the merchant's dashboard). "
+        f"Trailing 7-day net settlement: {_inr(fc.get('trailing_7d_net_inr'))}.",
         f"Current regime: {payload.get('regime')} "
         f"(confidence {payload.get('regime_confidence')}).",
         f"60-day forecast total: {_inr(fc.get('forecast_total_inr'))}.",
