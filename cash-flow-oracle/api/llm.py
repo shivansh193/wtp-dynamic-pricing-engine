@@ -142,6 +142,16 @@ def template_recommendation(payload: dict) -> str:
 _GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 
+def _gen_config(with_thinking_off: bool) -> dict:
+    cfg = {"maxOutputTokens": 800, "temperature": 0.6}
+    if with_thinking_off:
+        # 2.5-flash is a reasoning model; without this it can spend the whole
+        # token budget on thoughts and return an empty `parts`. Some API
+        # surfaces reject the field, so we retry without it.
+        cfg["thinkingConfig"] = {"thinkingBudget": 0}
+    return cfg
+
+
 async def _call_gemini(prompt: str) -> str | None:
     key = C.GEMINI_API_KEY
     if not key:
@@ -149,25 +159,24 @@ async def _call_gemini(prompt: str) -> str | None:
     try:
         import httpx  # already a dependency; no LLM SDK needed
 
-        body = {
+        base = {
             "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "maxOutputTokens": 600,
-                "temperature": 0.6,
-                # this is a 3-4 sentence answer, not a reasoning task - turn the
-                # thinking pass off so the token budget goes to visible output
-                # (a 2.5-flash "thinking" model otherwise spends it all on
-                # thoughts and returns an empty `parts`)
-                "thinkingConfig": {"thinkingBudget": 0},
-            },
         }
+        url = _GEMINI_URL.format(model=C.LLM_MODEL)
+        headers = {"x-goog-api-key": key}
+
         async with httpx.AsyncClient(timeout=25.0) as client:
             resp = await client.post(
-                _GEMINI_URL.format(model=C.LLM_MODEL),
-                headers={"x-goog-api-key": key},
-                json=body,
-            )
+                url, headers=headers, json={**base, "generationConfig": _gen_config(True)})
+            if resp.status_code == 400:
+                # older API surface may not accept thinkingConfig - retry plain
+                print(f"[cfo.llm] Gemini 400 ({resp.text[:200]}) -> retry without "
+                      "thinkingConfig")
+                resp = await client.post(
+                    url, headers=headers,
+                    json={**base, "generationConfig": _gen_config(False)})
+
         resp.raise_for_status()
         data = resp.json()
         cand = (data.get("candidates") or [{}])[0]
