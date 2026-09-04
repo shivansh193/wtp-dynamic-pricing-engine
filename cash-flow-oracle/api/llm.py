@@ -153,7 +153,7 @@ def _gen_config(with_thinking_off: bool) -> dict:
 
 
 async def _call_gemini(prompt: str) -> str | None:
-    key = C.GEMINI_API_KEY
+    key = (C.GEMINI_API_KEY or "").strip()
     if not key:
         return None
     try:
@@ -164,18 +164,24 @@ async def _call_gemini(prompt: str) -> str | None:
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         }
         url = _GEMINI_URL.format(model=C.LLM_MODEL)
-        headers = {"x-goog-api-key": key}
+
+        def _oneline(s: str) -> str:
+            return " ".join(s.split())[:300]
 
         async with httpx.AsyncClient(timeout=25.0) as client:
-            resp = await client.post(
-                url, headers=headers, json={**base, "generationConfig": _gen_config(True)})
-            if resp.status_code == 400:
-                # older API surface may not accept thinkingConfig - retry plain
-                print(f"[cfo.llm] Gemini 400 ({resp.text[:200]}) -> retry without "
-                      "thinkingConfig")
-                resp = await client.post(
-                    url, headers=headers,
-                    json={**base, "generationConfig": _gen_config(False)})
+            # try the header auth, then thinkingConfig-free, then ?key= query auth
+            attempts = [
+                ({"x-goog-api-key": key}, url, _gen_config(True)),
+                ({"x-goog-api-key": key}, url, _gen_config(False)),
+                ({}, f"{url}?key={key}", _gen_config(False)),
+            ]
+            resp = None
+            for hdrs, u, gen in attempts:
+                resp = await client.post(u, headers=hdrs,
+                                         json={**base, "generationConfig": gen})
+                if resp.status_code == 200:
+                    break
+                print(f"[cfo.llm] Gemini {resp.status_code}: {_oneline(resp.text)}")
 
         resp.raise_for_status()
         data = resp.json()
