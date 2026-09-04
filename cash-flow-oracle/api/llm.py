@@ -152,9 +152,17 @@ async def _call_gemini(prompt: str) -> str | None:
         body = {
             "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {"maxOutputTokens": 400, "temperature": 0.6},
+            "generationConfig": {
+                "maxOutputTokens": 600,
+                "temperature": 0.6,
+                # this is a 3-4 sentence answer, not a reasoning task - turn the
+                # thinking pass off so the token budget goes to visible output
+                # (a 2.5-flash "thinking" model otherwise spends it all on
+                # thoughts and returns an empty `parts`)
+                "thinkingConfig": {"thinkingBudget": 0},
+            },
         }
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=25.0) as client:
             resp = await client.post(
                 _GEMINI_URL.format(model=C.LLM_MODEL),
                 headers={"x-goog-api-key": key},
@@ -165,6 +173,9 @@ async def _call_gemini(prompt: str) -> str | None:
         cand = (data.get("candidates") or [{}])[0]
         parts = (cand.get("content") or {}).get("parts") or []
         text = " ".join(p.get("text", "").strip() for p in parts).strip()
+        if not text:
+            print(f"[cfo.llm] Gemini returned no text (finishReason="
+                  f"{cand.get('finishReason')!r}) -> template fallback")
         return text or None
     except Exception as exc:  # noqa: BLE001
         print(f"[cfo.llm] Gemini call failed ({exc!r}) -> template fallback")
