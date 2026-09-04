@@ -1,13 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { CheckoutForm } from "@/components/CheckoutForm";
+import { useEffect, useRef, useState } from "react";
 import { DynamicCheckout } from "@/components/DynamicCheckout";
 import { getSession, personalize } from "@/lib/api";
-import { PRESET_LABELS, signalsFromConfig } from "@/lib/profiles";
-import type { PricingResponse, Preset, SessionConfig, SessionInfo } from "@/lib/types";
+import { signalsFromConfig } from "@/lib/profiles";
+import type { PricingResponse, SessionConfig, SessionInfo } from "@/lib/types";
 
-type Phase = "loading" | "form" | "personalising" | "reveal" | "error";
+type Phase = "loading" | "personalising" | "reveal" | "error";
 
 export default function CheckoutPage({
   params,
@@ -19,8 +18,11 @@ export default function CheckoutPage({
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [result, setResult] = useState<PricingResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const started = useRef(false); // guards against React StrictMode's double effect in dev
 
   useEffect(() => {
+    if (started.current) return;
+    started.current = true;
     getSession(sessionId)
       .then((s) => {
         setSession(s);
@@ -31,12 +33,16 @@ export default function CheckoutPage({
             return;
           }
         }
-        setPhase("form");
+        // seller already set this shopper's profile when generating the link -
+        // price it immediately instead of asking them to confirm the same
+        // fields again
+        submit(s.config);
       })
       .catch((e) => {
         setErr(e.message);
         setPhase("error");
       });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   const submit = async (derived: SessionConfig) => {
@@ -61,7 +67,7 @@ export default function CheckoutPage({
     }
     setErr(
       /failed to fetch|networkerror|503/i.test(String(lastErr?.message))
-        ? "The pricing service is waking up — give it a few seconds and tap “See my price” again."
+        ? "The pricing service is waking up — give it a few seconds and tap “Try again”."
         : lastErr?.message || "Something went wrong.",
     );
     setPhase("error");
@@ -74,13 +80,6 @@ export default function CheckoutPage({
           <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
             RunHub checkout
           </p>
-          {session && phase === "form" && (
-            <p className="text-[11px] text-slate-400">
-              pre-filled from “
-              {PRESET_LABELS[session.preset as Preset]?.label ?? session.preset}”
-              — adjust anything before you continue
-            </p>
-          )}
         </div>
 
         {phase === "loading" && (
@@ -94,22 +93,14 @@ export default function CheckoutPage({
               <button
                 onClick={() => {
                   setErr(null);
-                  setPhase("form");
+                  submit(session.config);
                 }}
                 className="mt-3 rounded-md bg-ink px-4 py-1.5 text-xs font-medium text-white"
               >
-                Back to form
+                Try again
               </button>
             )}
           </div>
-        )}
-
-        {phase === "form" && session && (
-          <CheckoutForm
-            initial={session.config}
-            onSubmit={submit}
-            submitting={false}
-          />
         )}
 
         {phase === "personalising" && (
